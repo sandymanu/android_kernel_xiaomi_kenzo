@@ -1095,6 +1095,16 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 		.step = 1,
 	},
 	{
+		.id = V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE,
+		.name = "Set Encoder Operating rate",
+		.type = V4L2_CTRL_TYPE_INTEGER,
+		.minimum = 0,
+		.maximum = 300 << 16,  /* 300 fps in Q16 format*/
+		.default_value = 0,
+		.step = 1,
+		.qmenu = NULL,
+	},
+	{
 		.id = V4L2_CID_MPEG_VIDC_VIDEO_MAX_HIERP_LAYERS,
 		.name = "Set Max Hier P num layers sessions",
 		.type = V4L2_CTRL_TYPE_INTEGER,
@@ -2767,6 +2777,9 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 			ctrl->val);
 		pdata = &mbi_statistics_mode;
 		break;
+	case V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE:
+		property_id = 0;
+                break;
 	case V4L2_CID_MPEG_VIDC_VIDEO_MAX_HIERP_LAYERS:
 		property_id = HAL_PARAM_VENC_HIER_P_MAX_ENH_LAYERS;
 		max_hierp_layers = ctrl->val;
