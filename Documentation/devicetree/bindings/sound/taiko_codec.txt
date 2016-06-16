@@ -11,7 +11,6 @@ Required properties:
                         If this property is not defined, it is expected
                         to atleast have "qcom,wcd-rst-n-gpio" to be defined
  - qcom,wcd-rst-gpio-node: Phandle reference to the DT node having codec reset gpio
-
                         configuration. If this property is not defined, it is
                         expected to atleast define "qcom,cdc-reset-gpio" property.
 

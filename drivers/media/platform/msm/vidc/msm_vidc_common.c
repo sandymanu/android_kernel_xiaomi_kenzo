@@ -81,6 +81,11 @@ static inline bool is_thumbnail_session(struct msm_vidc_inst *inst)
 	return !!(inst->flags & VIDC_THUMBNAIL);
 }
 
+static inline bool is_realtime_session(struct msm_vidc_inst *inst)
+{
+	return !!(inst->flags & VIDC_REALTIME);
+}
+
 int msm_comm_g_ctrl(struct msm_vidc_inst *inst, int id)
 {
 	int rc = 0;
@@ -109,19 +114,34 @@ enum multi_stream msm_comm_get_stream_output_mode(struct msm_vidc_inst *inst)
 static int msm_comm_get_mbs_per_sec(struct msm_vidc_inst *inst)
 {
 	int output_port_mbs, capture_port_mbs;
+	int fps;
+
 	output_port_mbs = NUM_MBS_PER_FRAME(inst->prop.width[OUTPUT_PORT],
 		inst->prop.height[OUTPUT_PORT]);
 	capture_port_mbs = NUM_MBS_PER_FRAME(inst->prop.width[CAPTURE_PORT],
 		inst->prop.height[CAPTURE_PORT]);
-	return max(output_port_mbs, capture_port_mbs) * inst->prop.fps;
+
+	if (inst->operating_rate) {
+		fps = (inst->operating_rate >> 16) ?
+			inst->operating_rate >> 16 : 1;
+		/*
+		 * Check if operating rate is less than fps.
+		 * If Yes, then use fps to scale the clocks
+		*/
+		fps = fps > inst->prop.fps ? fps : inst->prop.fps;
+		return max(output_port_mbs, capture_port_mbs) * fps;
+	} else {
+		return max(output_port_mbs, capture_port_mbs) * inst->prop.fps;
+	}
 }
 
 int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 		enum load_calc_quirks quirks)
 {
 	int load = 0;
+
 	if (!(inst->state >= MSM_VIDC_OPEN_DONE &&
-			inst->state < MSM_VIDC_STOP_DONE))
+		inst->state < MSM_VIDC_STOP_DONE))
 		return 0;
 
 	load = msm_comm_get_mbs_per_sec(inst);
@@ -135,6 +155,22 @@ int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 		if (!(quirks & LOAD_CALC_IGNORE_TURBO_LOAD))
 			load = inst->core->resources.max_load;
 	}
+
+	if (!is_thumbnail_session(inst) && !is_realtime_session(inst) &&
+		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD)) {
+		if (!inst->prop.fps) {
+			dprintk(VIDC_INFO, "%s: instance:%p prop->fps is set 0\n", __func__, inst);
+			load = 0;
+		} else {
+			load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
+		}
+	}
+
+	dprintk(VIDC_DBG,
+		"inst[%p]: load %d, wxh %dx%d, fps %d, operating_rate %d, flags 0x%x, quirks 0x%x\n",
+		inst, load, inst->prop.width[OUTPUT_PORT],
+		inst->prop.height[OUTPUT_PORT], inst->prop.fps,
+		inst->operating_rate >> 16, inst->flags, quirks);
 
 	return load;
 }
@@ -279,14 +315,17 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 		vote_data[i].load = msm_comm_get_inst_load(inst,
 				LOAD_CALC_NO_QUIRKS);
 
+		vote_data[i].power_mode = 0;
+		if (is_low_power_session(inst))
+			vote_data[i].power_mode |= VIDC_POWER_LOW;
 		if (is_turbo_session(inst))
-			vote_data[i].power_mode = VIDC_POWER_TURBO;
-		else if (is_low_power_session(inst))
-			vote_data[i].power_mode = VIDC_POWER_LOW;
-		else if (is_low_latency_session(inst))
-			vote_data[i].power_mode = VIDC_POWER_LOW_LATENCY;
-		else
-			vote_data[i].power_mode = VIDC_POWER_NORMAL;
+			vote_data[i].power_mode |= VIDC_POWER_TURBO;
+		if (is_low_latency_session(inst))
+			vote_data[i].power_mode |= VIDC_POWER_LOW_LATENCY;
+
+		/* if no power modes enabled then go for normal */
+		if (!vote_data[i].power_mode)
+			vote_data[i].power_mode |= VIDC_POWER_NORMAL;
 
 		i++;
 	}
@@ -436,8 +475,12 @@ static void handle_sys_init_done(enum command_response cmd, void *data)
 				HAL_VIDEO_CODEC_MVC;
 
 	core->codec_count = sys_init_msg->codec_count;
-	memcpy(core->capabilities, sys_init_msg->capabilities,
-		sys_init_msg->codec_count * sizeof(struct msm_vidc_capability));
+	if (core->capabilities)
+		memcpy(core->capabilities, sys_init_msg->capabilities,
+			sys_init_msg->codec_count *
+			sizeof(struct msm_vidc_capability));
+	else
+		dprintk(VIDC_ERR, "%s: core capabilities is NULL\n", __func__);
 
 	dprintk(VIDC_DBG,
 		"%s: supported_codecs[%d]: enc = %#x, dec = %#x\n",
@@ -740,6 +783,7 @@ static void handle_event_change(enum command_response cmd, void *data)
 
 	switch (event_notify->hal_event_type) {
 	case HAL_EVENT_SEQ_CHANGED_SUFFICIENT_RESOURCES:
+		inst->sufficient_res_event_change_count++;
 		event = V4L2_EVENT_SEQ_CHANGED_INSUFFICIENT;
 		control.id =
 			V4L2_CID_MPEG_VIDC_VIDEO_CONTINUE_DATA_TRANSFER;
@@ -747,7 +791,10 @@ static void handle_event_change(enum command_response cmd, void *data)
 		if (rc)
 			dprintk(VIDC_WARN,
 					"Failed to get Smooth streamng flag\n");
-		if (!rc && control.value == true) {
+		if (!rc && control.value == true &&
+			inst->sufficient_res_event_change_count > 1 &&
+			msm_comm_get_stream_output_mode(inst) ==
+			HAL_VIDEO_DECODER_PRIMARY) {
 			event = V4L2_EVENT_SEQ_CHANGED_SUFFICIENT;
 			dprintk(VIDC_DBG,
 				"send session_continue after sufficient event\n");
@@ -2318,7 +2365,8 @@ static int msm_vidc_load_resources(int flipped_state,
 	int num_mbs_per_sec = 0, max_load_adj = 0;
 	struct msm_vidc_core *core;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
-		LOAD_CALC_IGNORE_THUMBNAIL_LOAD;
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters\n", __func__);
@@ -2505,6 +2553,26 @@ static int msm_comm_session_close(int flipped_state,
 	}
 	change_inst_state(inst, MSM_VIDC_CLOSE);
 exit:
+	return rc;
+}
+
+static int msm_comm_session_close_done(int flipped_state,
+		struct msm_vidc_inst *inst)
+{
+	int rc = 0;
+
+	if (!inst || !inst->core || !inst->core->device) {
+		dprintk(VIDC_ERR, "%s invalid params\n", __func__);
+		return -EINVAL;
+	}
+
+	rc = wait_for_state(inst, flipped_state, MSM_VIDC_CLOSE_DONE,
+			SESSION_END_DONE);
+	if (rc)
+		dprintk(VIDC_ERR, "%s: session_end_done failed\n", __func__);
+	else
+		msm_comm_session_clean(inst);
+
 	return rc;
 }
 
@@ -2958,8 +3026,7 @@ int msm_comm_try_state(struct msm_vidc_inst *inst, int state)
 		if (rc || state <= get_flipped_state(inst->state, state))
 			break;
 	case MSM_VIDC_CLOSE_DONE:
-		rc = wait_for_state(inst, flipped_state, MSM_VIDC_CLOSE_DONE,
-				SESSION_END_DONE);
+		rc = msm_comm_session_close_done(flipped_state, inst);
 		if (rc || state <= get_flipped_state(inst->state, state))
 			break;
 	case MSM_VIDC_CORE_UNINIT:
@@ -4104,7 +4171,8 @@ static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 {
 	int num_mbs_per_sec = 0, max_load_adj = 0;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
-		LOAD_CALC_IGNORE_THUMBNAIL_LOAD;
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (inst->state == MSM_VIDC_OPEN_DONE) {
 		max_load_adj = inst->core->resources.max_load + inst->capability.mbs_per_frame.max;

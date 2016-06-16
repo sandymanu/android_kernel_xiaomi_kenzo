@@ -76,6 +76,7 @@ struct subsys_desc {
 	int shutdown_ack_gpio;
 	int ramdump_disable;
 	bool no_auth;
+	bool pil_mss_memsetup;
 	int ssctl_instance_id;
 	u32 sysmon_pid;
 	int sysmon_shutdown_ret;
@@ -172,7 +173,7 @@ static inline void notify_proxy_vote(struct device *device) { }
 static inline void notify_proxy_unvote(struct device *device) { }
 static inline int wait_for_shutdown_ack(struct subsys_desc *desc)
 {
-	return 0;
+	return -ENOSYS;
 }
 #endif /* CONFIG_MSM_SUBSYSTEM_RESTART */
 

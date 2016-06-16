@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2016 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -50,8 +50,9 @@ module_param(disable_restart_work, uint, S_IRUGO | S_IWUSR);
 static int enable_debug;
 module_param(enable_debug, int, S_IRUGO | S_IWUSR);
 
-#define SHUTDOWN_ACK_MAX_LOOPS	50
-#define SHUTDOWN_ACK_DELAY	100
+/* The maximum shutdown timeout is the product of MAX_LOOPS and DELAY_MS. */
+#define SHUTDOWN_ACK_MAX_LOOPS	100
+#define SHUTDOWN_ACK_DELAY_MS	100
 
 /**
  * enum p_subsys_state - state of a subsystem (private)
@@ -70,17 +71,20 @@ enum p_subsys_state {
 
 /**
  * enum subsys_state - state of a subsystem (public)
+ * @SUBSYS_OFFLINING: subsystem is offlining
  * @SUBSYS_OFFLINE: subsystem is offline
  * @SUBSYS_ONLINE: subsystem is online
  *
  * The 'public' side of the subsytem state, exposed to userspace.
  */
 enum subsys_state {
+	SUBSYS_OFFLINING,
 	SUBSYS_OFFLINE,
 	SUBSYS_ONLINE,
 };
 
 static const char * const subsys_states[] = {
+	[SUBSYS_OFFLINING] = "OFFLINING",
 	[SUBSYS_OFFLINE] = "OFFLINE",
 	[SUBSYS_ONLINE] = "ONLINE",
 };
@@ -559,13 +563,13 @@ int wait_for_shutdown_ack(struct subsys_desc *desc)
 {
 	int count;
 
-	if (!desc->shutdown_ack_gpio)
+	if (desc && !desc->shutdown_ack_gpio)
 		return 0;
 
 	for (count = SHUTDOWN_ACK_MAX_LOOPS; count > 0; count--) {
 		if (gpio_get_value(desc->shutdown_ack_gpio))
 			return count;
-		msleep(SHUTDOWN_ACK_DELAY);
+		msleep(SHUTDOWN_ACK_DELAY_MS);
 	}
 
 	pr_err("[%s]: Timed out waiting for shutdown ack\n", desc->name);
@@ -709,6 +713,7 @@ static void subsys_stop(struct subsys_device *subsys)
 
 	if (!of_property_read_bool(subsys->desc->dev->of_node,
 					"qcom,pil-force-shutdown")) {
+		subsys_set_state(subsys, SUBSYS_OFFLINING);
 		subsys->desc->sysmon_shutdown_ret =
 				sysmon_send_shutdown(subsys->desc);
 		if (subsys->desc->sysmon_shutdown_ret)

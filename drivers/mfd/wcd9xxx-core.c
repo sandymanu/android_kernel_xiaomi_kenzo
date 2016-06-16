@@ -1035,11 +1035,6 @@ static int wcd9335_bring_up(struct wcd9xxx *wcd9xxx)
 		return -EINVAL;
 	}
 
-	if (val < 0 || byte0 < 0) {
-		pr_err("%s: some thing wrong with the codec restart target\n", __func__);
-		emergency_restart();
-	}
-
 	if ((val & 0x80) && (byte0 == 0x0)) {
 		dev_info(wcd9xxx->dev, "%s: wcd9335 codec version is v1.1\n",
 			 __func__);
@@ -1142,12 +1137,14 @@ static int wcd9xxx_reset(struct wcd9xxx *wcd9xxx)
 	struct wcd9xxx_pdata *pdata = wcd9xxx->dev->platform_data;
 
 	if (wcd9xxx->wcd_rst_np) {
+		/* use pinctrl and call into wcd-rst-gpio driver */
 		ret = wcd_gpio_ctrl_select_sleep_state(wcd9xxx->wcd_rst_np);
 		if (ret) {
 			pr_err("%s: wcd sleep pinctrl state fail!\n",
 					__func__);
 			return ret;
 		}
+		/* 20ms sleep required after pulling the reset gpio to LOW */
 		msleep(20);
 		ret = wcd_gpio_ctrl_select_active_state(wcd9xxx->wcd_rst_np);
 		if (ret) {
@@ -1155,6 +1152,7 @@ static int wcd9xxx_reset(struct wcd9xxx *wcd9xxx)
 					__func__);
 			return ret;
 		}
+		/* 20ms sleep required after pulling the reset gpio to HIGH */
 		msleep(20);
 		return 0;
 	}
@@ -2939,7 +2937,7 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 		pr_err("%s: failed to get slimbus %s logical address: %d\n",
 		       __func__, wcd9xxx->slim->name, ret);
 		ret = -EPROBE_DEFER;
-		goto reboot;
+		goto err_reset;
 	}
 	wcd9xxx->read_dev = wcd9xxx_slim_read_device;
 	wcd9xxx->write_dev = wcd9xxx_slim_write_device;
@@ -2963,7 +2961,7 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 		pr_err("%s: failed to get slimbus %s logical address: %d\n",
 		       __func__, wcd9xxx->slim->name, ret);
 		ret = -EPROBE_DEFER;
-		goto reboot;
+		goto err_slim_add;
 	}
 	wcd9xxx_inf_la = wcd9xxx->slim_slave->laddr;
 	wcd9xxx_set_intf_type(WCD9XXX_INTERFACE_TYPE_SLIMBUS);
@@ -3011,11 +3009,8 @@ err_codec:
 	slim_set_clientdata(slim, NULL);
 err:
 	return ret;
-reboot:
-	pr_err("%s: some thing wrong with the codec - restart target\n", __func__);
-	emergency_restart();
-	return ret;
 }
+
 static int wcd9xxx_slim_remove(struct slim_device *pdev)
 {
 	struct wcd9xxx *wcd9xxx;

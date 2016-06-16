@@ -36,9 +36,13 @@
 
 #define WCD_CPE_IMAGE_FNAME_MAX 64
 
+#define WCD_CPE_AFE_OUT_PORT_2 2
+#define WCD_CPE_AFE_OUT_PORT_4 4
+
 enum {
 	WCD_CPE_LSM_CAL_AFE = 0,
 	WCD_CPE_LSM_CAL_LSM,
+	WCD_CPE_LSM_CAL_TOPOLOGY_ID,
 	WCD_CPE_LSM_CAL_MAX,
 };
 
@@ -57,6 +61,7 @@ struct wcd_cpe_cdc_cb {
 	int (*cpe_clk_en) (struct snd_soc_codec *, bool);
 	int (*cdc_ext_clk)(struct snd_soc_codec *codec, int enable, bool dapm);
 	int (*lab_cdc_ch_ctl)(struct snd_soc_codec *codec, u8 event);
+	int (*get_afe_out_port_id)(struct snd_soc_codec *codec, u16 *port_id);
 	int (*bus_vote_bw)(struct snd_soc_codec *codec,
 			   bool vote);
 
@@ -94,6 +99,13 @@ struct wcd_cpe_irq_info {
 	int cpe_engine_irq;
 	int cpe_err_irq;
 	u8 cpe_fatal_irqs;
+};
+
+struct wcd_cpe_hw_info {
+	u32 dram_offset;
+	size_t dram_size;
+	u32 iram_offset;
+	size_t iram_size;
 };
 
 struct wcd_cpe_core {
@@ -181,6 +193,12 @@ struct wcd_cpe_core {
 
 	/* Kobject for sysfs entry */
 	struct kobject cpe_kobj;
+
+	/* Reference count for cpe clk*/
+	int cpe_clk_ref;
+
+	/* codec based hardware info */
+	struct wcd_cpe_hw_info hw_info;
 };
 
 struct wcd_cpe_params {

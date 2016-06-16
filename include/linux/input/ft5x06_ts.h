@@ -3,7 +3,7 @@
  * FocalTech ft5x06 TouchScreen driver header file.
  *
  * Copyright (c) 2010  Focal tech Ltd.
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -34,6 +34,22 @@ struct fw_upgrade_info {
 	u16 delay_erase_flash;
 };
 
+struct ft5x06_psensor_platform_data {
+	struct input_dev *input_psensor_dev;
+	struct sensors_classdev ps_cdev;
+	int tp_psensor_opened;
+	char tp_psensor_data; /* 0 near, 1 far */
+	struct ft5x06_ts_data *data;
+};
+
+struct ft5x06_gesture_platform_data {
+	int gesture_enable_to_set;	/* enable/disable gesture */
+	int in_pocket;	/* whether in pocket mode or not */
+	struct device *dev;
+	struct class *gesture_class;
+	struct ft5x06_ts_data *data;
+};
+
 struct ft5x06_ts_platform_data {
 	struct fw_upgrade_info info;
 	const char *name;
@@ -60,9 +76,11 @@ struct ft5x06_ts_platform_data {
 	u32 num_max_touches;
 	bool fw_vkey_support;
 	bool no_force_update;
-	bool fw_auto_update;
 	bool i2c_pull_up;
 	bool ignore_id_check;
+	bool psensor_support;
+	bool gesture_support;
+	bool resume_in_workqueue;
 	int (*power_init) (bool);
 	int (*power_on) (bool);
 };

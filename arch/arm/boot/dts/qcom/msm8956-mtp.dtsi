@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2016 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -19,66 +19,64 @@
 
 &i2c_4 { /* BLSP1 QUP4 */
 	focaltech@38 {
-			compatible = "focaltech,5x06";
-			reg = <0x38>;
-			interrupt-parent = <&msm_gpio>;
-			interrupts = <65 0x2008>;
-			vdd-supply = <&pm8950_l10>;
-			vcc_i2c-supply = <&pm8950_l6>;
-			/* pins used by touchscreen */
-			pinctrl-names = "pmx_ts_active","pmx_ts_suspend","pmx_ts_release";
-	pinctrl-0 = <&ts_int_active &ts_reset_active &ts_power_active>;
-	pinctrl-1 = <&ts_int_suspend &ts_reset_suspend &ts_power_suspend>;
-			pinctrl-2 = <&ts_release>;
-			focaltech,name = "ft5346";
-			focaltech,family-id = <0x54>;
-			focaltech,reset-gpio = <&msm_gpio 64 0x0>;
-			focaltech,irq-gpio = <&msm_gpio 65 0x2008>;
-			focaltech,power-gpio = <&msm_gpio 134 0x0>;
-			focaltech,display-coords = <0 0 1080 1920>;
-			focaltech,panel-coords = <0 0 1080 2098>;
-			focaltech,button-map = <139 102 158>;
-			focaltech,fw-name = "ct820_ft_fw.bin";
-			focaltech,fw-auto-update;
-			/*focaltech,no-force-update;*/
-			focaltech,i2c-pull-up;
-			focaltech,group-id = <1>;
-			focaltech,hard-reset-delay-ms = <20>;
-			focaltech,soft-reset-delay-ms = <30>;
-			focaltech,num-max-touches = <10>;
-			focaltech,fw-delay-aa-ms = <2>;
-			focaltech,fw-delay-55-ms = <2>;
-			focaltech,fw-upgrade-id1 = <0x54>;
-			focaltech,fw-upgrade-id2 = <0x2c>;
-			focaltech,fw-delay-readid-ms = <10>;
-			focaltech,fw-delay-era-flsh-ms = <2000>;
-			focaltech,fw-auto-cal;
-			focaltech,ignore-id-check;
-		};
+		compatible = "focaltech,5x06";
+		reg = <0x38>;
+		interrupt-parent = <&msm_gpio>;
+		interrupts = <65 0x2008>;
+		vdd-supply = <&pm8950_l10>;
+		vcc_i2c-supply = <&pm8950_l6>;
+		/* pins used by touchscreen */
+		pinctrl-names = "pmx_ts_active","pmx_ts_suspend","pmx_ts_release";
+		pinctrl-0 = <&ts_int_active &ts_reset_active &ts_power_active>;
+		pinctrl-1 = <&ts_int_suspend &ts_reset_suspend &ts_power_suspend>;
+		pinctrl-2 = <&ts_release>;
+		focaltech,name = "ft5346";
+		focaltech,family-id = <0x54>;
+		focaltech,irq-gpio = <&msm_gpio 65 0x2008>;
+		focaltech,reset-gpio = <&msm_gpio 64 0x0>;
+		focaltech,power-gpio = <&msm_gpio 134 0x0>;
+		focaltech,display-coords = <0 0 1080 1920>;
+		focaltech,panel-coords = <0 0 1080 2098>;
+		focaltech,button-map = <139 102 158>;
+		focaltech,fw-name = "ct820_ft_fw.bin";
+		focaltech,i2c-pull-up;
+		focaltech,group-id = <1>;
+		focaltech,hard-reset-delay-ms = <20>;
+		focaltech,soft-reset-delay-ms = <30>;
+		focaltech,num-max-touches = <10>;
+		focaltech,fw-delay-aa-ms = <2>;
+		focaltech,fw-delay-55-ms = <2>;
+		focaltech,fw-upgrade-id1 = <0x54>;
+		focaltech,fw-upgrade-id2 = <0x2c>;
+		focaltech,fw-delay-readid-ms = <10>;
+		focaltech,fw-delay-era-flsh-ms = <2000>;
+		focaltech,fw-auto-cal;
+		focaltech,ignore-id-check;
+	};
 
-		atmel@4a {
-			compatible = "atmel,mxt-ts-1";
-			reg = <0x4a>;
-			interrupt-parent = <&msm_gpio>;
-			interrupts = <65 0x2>;
-			vcc_i2c-supply = <&pm8950_l6>;
-			/* pins used by touchscreen */
-			pinctrl-names = "pmx_ts_active","pmx_ts_suspend";
-			pinctrl-0 = <&ts_int_active &ts_reset_active &ts_power_active>;
-			pinctrl-1 = <&ts_int_suspend &ts_reset_suspend &ts_power_suspend>;
-			atmel,family-id = <0x82>;
-			atmel,reset-gpio = <&msm_gpio 64 0x0>;
-			atmel,power_ldo-gpio = <&msm_gpio 134 0x0>;
-			atmel,irq-gpio = <&msm_gpio 65 0x2008>; //IRQF_TRIGGER_LOW
-			atmel,display-coords = <0 0 1080 1920>;
-			atmel,panel-coords = <0 0 1080 1920>;
-			atmel,button-map= <158 102 139>;
-			atmel,no-force-update;
-			atmel,i2c-pull-up;
+	atmel@4a {
+		compatible = "atmel,mxt-ts-1";
+		reg = <0x4a>;
+		interrupt-parent = <&msm_gpio>;
+		interrupts = <65 0x2>;
+		vcc_i2c-supply = <&pm8950_l6>;
+		/* pins used by touchscreen */
+		pinctrl-names = "pmx_ts_active","pmx_ts_suspend";
+		pinctrl-0 = <&ts_int_active &ts_reset_active &ts_power_active>;
+		pinctrl-1 = <&ts_int_suspend &ts_reset_suspend &ts_power_suspend>;
+		atmel,family-id = <0x82>;
+		atmel,reset-gpio = <&msm_gpio 64 0x0>;
+		atmel,power_ldo-gpio = <&msm_gpio 134 0x0>;
+		atmel,irq-gpio = <&msm_gpio 65 0x2008>; //IRQF_TRIGGER_LOW
+		atmel,display-coords = <0 0 1080 1920>;
+		atmel,panel-coords = <0 0 1080 1920>;
+		atmel,button-map= <158 102 139>;
+		atmel,no-force-update;
+		atmel,i2c-pull-up;
 	};
 };
-&i2c_6 {
 
+&i2c_6 { /* BLSP2 QUP2 */
 	awinic@45 { /* Breath Light-Driven */
 		compatible = "awinic,aw2013";
 		reg = <0x45>;
@@ -117,36 +115,12 @@
 		};
 	};
 };
+
 &usb_otg {
 	qcom,usbid-switch = <&msm_gpio 17 0>;
 };
 
 &soc {
-	ntc_sensor {
-		compatible = "ntc-sensor";
-		qcom,board_ntc-vadc = <&pm8950_vadc>;
-		ntc_vdd-supply = <&pm8950_l16>;
-		qcom,ntc-min-uv = <1800000>;
-		qcom,ntc-max-uv = <1800000>;
-	};
-	hall_switch {
-		compatible = "hall-switch,och175";
-		pinctrl-names = "hall_active","hall_suspend";
-		pinctrl-0 = <&hall_int_active>;
-		pinctrl-1 = <&hall_int_suspend>;
-		vdd-io-supply= <&pm8950_l5>;
-		interrupt-names = "hall_irq";
-		hall,irq-gpio = <&msm_gpio 107 0x00>;
-	};
-	gen-vkeys {
-		compatible = "qcom,gen-vkeys";
-		label = "ft5x06_ts";
-		qcom,disp-maxx = <1080>;
-		qcom,disp-maxy = <1920>;
-		qcom,panel-maxx = <1080>;
-		qcom,panel-maxy = <2200>;
-		qcom,key-codes = <139 172 158>;
-	};
 	gpio_keys {
 		compatible = "gpio-keys";
 		input-name = "gpio-keys";
@@ -179,6 +153,34 @@
 		};
 	};
 
+	ntc_sensor {
+		compatible = "ntc-sensor";
+		qcom,board_ntc-vadc = <&pm8950_vadc>;
+		ntc_vdd-supply = <&pm8950_l16>;
+		qcom,ntc-min-uv = <1800000>;
+		qcom,ntc-max-uv = <1800000>;
+	};
+
+	hall_switch {
+		compatible = "hall-switch,och175";
+		pinctrl-names = "hall_active","hall_suspend";
+		pinctrl-0 = <&hall_int_active>;
+		pinctrl-1 = <&hall_int_suspend>;
+		vdd-io-supply= <&pm8950_l5>;
+		interrupt-names = "hall_irq";
+		hall,irq-gpio = <&msm_gpio 107 0x00>;
+	};
+
+	gen-vkeys {
+		compatible = "qcom,gen-vkeys";
+		label = "ft5x06_ts";
+		qcom,disp-maxx = <1080>;
+		qcom,disp-maxy = <1920>;
+		qcom,panel-maxx = <1080>;
+		qcom,panel-maxy = <2200>;
+		qcom,key-codes = <139 172 158>;
+	};
+
 	pwm_ir {
 		compatible = "pwm-ir";
 		pwms = <&pmi8950_pwm 0 0>;
@@ -187,30 +189,17 @@
 		vdd-supply = <&pm8950_l10>;
 	};
 
-	fpc_fpc1020 {
-		compatible = "fpc,fpc1020";
-		fpc,reset_gpio = <&msm_gpio 110 0>;
-		fpc,irq_gpio = <&msm_gpio 106 0>;
-		fpc,irq_flags = <0x2001>;
-		fpc,event-type = <4>;
-		fpc,event-code = <4>;
-		vcc_spi-supply = <&pm8950_l6>;
-		vdd_ana-supply = <&pm8950_l6>;
-		vdd_io-supply = <&pm8950_l6>;
-	};
-
-	goodix_gf318m {
-		compatible = "goodix,fingerprint";
-
-		vcc_spi-supply  = <&pm8950_l10>;
-		vdd_ana-supply  = <&pm8950_l10>;
-		vdd_io-supply   = <&pm8950_l10>;
-
-		goodix,gpio_reset =<&msm_gpio 110 0>;
-		goodix,gpio_irq = <&msm_gpio 106 0>;
-		goodix,gpio_pwr = <&msm_gpio 119 0>;
-
-	};
+       fpc_fpc1020 {
+                compatible = "fpc,fpc1020";
+                fpc,reset_gpio = <&msm_gpio 110 0>;
+                fpc,irq_gpio = <&msm_gpio 106 0>;
+                fpc,irq_flags = <0x2001>;
+                fpc,event-type = <4>;
+                fpc,event-code = <4>;
+                vcc_spi-supply = <&pm8950_l6>;
+                vdd_ana-supply = <&pm8950_l6>;
+                vdd_io-supply = <&pm8950_l6>;
+        };
 };
 
 &blsp1_uart2 {
@@ -250,7 +239,7 @@
 		};
 	};
 
-		qcom,pmi8950@2 {
+	qcom,pmi8950@2 {
 		qcom,leds@a100 {
 			status = "okay";
 			qcom,led_mpp_2 {
@@ -267,7 +256,6 @@
 			};
 		};
 	};
-
 };
 
 &sdhc_1 {
@@ -317,6 +305,26 @@
 
 	status = "ok";
 };
+
+&sdhc_3 {
+	vdd-supply = <&pm8950_l5>;
+	qcom,vdd-voltage-level = <1800000 1800000>;
+	qcom,vdd-current-level = <200 639000>;
+
+	vdd-io-supply = <&pm8950_l5>;
+	qcom,vdd-io-always-on;
+	qcom,vdd-io-voltage-level = <1800000 1800000>;
+	qcom,vdd-io-current-level = <200 639000>;
+
+	pinctrl-names = "active", "sleep";
+	pinctrl-0 = <&sdc3_clk_on &sdc3_cmd_on &sdc3_dat_on
+					&sdc3_wlan_gpio_active>;
+	pinctrl-1 = <&sdc3_clk_off &sdc3_cmd_off &sdc3_dat_off
+					&sdc3_wlan_gpio_sleep>;
+
+	status = "disabled";
+};
+
 
 /* CoreSight */
 &tpiu {

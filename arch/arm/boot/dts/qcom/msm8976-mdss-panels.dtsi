@@ -32,8 +32,8 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		qcom,panel-supply-entry@1 {
-			reg = <1>;
+		qcom,panel-supply-entry@0 {
+			reg = <0>;
 			qcom,supply-name = "vddio";
 			qcom,supply-min-voltage = <1800000>;
 			qcom,supply-max-voltage = <1800000>;
@@ -41,8 +41,8 @@
 			qcom,supply-disable-load = <100>;
 		};
 
-		qcom,panel-supply-entry@2 {
-			reg = <2>;
+		qcom,panel-supply-entry@1 {
+			reg = <1>;
 			qcom,supply-name = "lab";
 			qcom,supply-min-voltage = <4600000>;
 			qcom,supply-max-voltage = <6000000>;
@@ -50,8 +50,8 @@
 			qcom,supply-disable-load = <100>;
 		};
 
-		qcom,panel-supply-entry@3 {
-			reg = <3>;
+		qcom,panel-supply-entry@2 {
+			reg = <2>;
 			qcom,supply-name = "ibb";
 			qcom,supply-min-voltage = <4600000>;
 			qcom,supply-max-voltage = <6000000>;

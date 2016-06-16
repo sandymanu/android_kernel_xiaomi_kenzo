@@ -585,6 +585,8 @@ struct ipa_sys_context {
 	struct work_struct repl_work;
 	void (*repl_hdlr)(struct ipa_sys_context *sys);
 	struct ipa_repl_ctx repl;
+	unsigned int repl_trig_cnt;
+	unsigned int repl_trig_thresh;
 
 	/* ordering is important - mutable fields go above */
 	struct ipa_ep_context *ep;
@@ -774,6 +776,19 @@ struct ipa_active_clients {
 	spinlock_t spinlock;
 	bool mutex_locked;
 	int cnt;
+};
+
+enum ipa_wakelock_ref_client {
+	IPA_WAKELOCK_REF_CLIENT_TX  = 0,
+	IPA_WAKELOCK_REF_CLIENT_LAN_RX = 1,
+	IPA_WAKELOCK_REF_CLIENT_WAN_RX = 2,
+	IPA_WAKELOCK_REF_CLIENT_SPS = 3,
+	IPA_WAKELOCK_REF_CLIENT_MAX
+};
+
+struct ipa_wakelock_ref_cnt {
+	spinlock_t spinlock;
+	u32 cnt;
 };
 
 struct ipa_tag_completion {
@@ -1056,10 +1071,22 @@ struct ipa_uc_wdi_ctx {
  * @dec_clients: true if need to decrease active clients count
  * @eot_activity: represent EOT interrupt activity to determine to reset
  *  the inactivity timer
+ * @sps_pm_lock: Lock to protect the sps_pm functionality.
  */
 struct ipa_sps_pm {
 	atomic_t dec_clients;
 	atomic_t eot_activity;
+	struct mutex sps_pm_lock;
+};
+
+/**
+ * struct ipacm_client_info - the client-info indicated from IPACM
+ * @ipacm_client_enum: the enum to indicate tether-client
+ * @ipacm_client_uplink: the bool to indicate pipe for uplink
+ */
+struct ipacm_client_info {
+	enum ipacm_client_enum client_enum;
+	bool uplink;
 };
 
 /**
@@ -1137,6 +1164,8 @@ struct ipa_sps_pm {
  * @ipa_num_pipes: The number of pipes used by IPA HW
  * @skip_uc_pipe_reset: Indicates whether pipe reset via uC needs to be avoided
  * @ipa_client_apps_wan_cons_agg_gro: RMNET_IOCTL_INGRESS_FORMAT_AGG_DATA
+ * @w_lock: Indicates the wakeup source.
+ * @wakelock_ref_cnt: Indicates the number of times wakelock is acquired
 
  * IPA context - holds all relevant info about IPA driver and its state
  */
@@ -1237,10 +1266,14 @@ struct ipa_context {
 	unsigned long peer_bam_dev;
 	u32 peer_bam_map_cnt;
 	u32 wdi_map_cnt;
+	struct wakeup_source w_lock;
+	struct ipa_wakelock_ref_cnt wakelock_ref_cnt;
 
 	/* RMNET_IOCTL_INGRESS_FORMAT_AGG_DATA */
 	bool ipa_client_apps_wan_cons_agg_gro;
 	bool tethered_flow_control;
+	/* M-release support to know client pipes */
+	struct ipacm_client_info ipacm_client[IPA_MAX_NUM_PIPES];
 };
 
 /**
@@ -1402,6 +1435,15 @@ struct ipa_controller {
 };
 
 extern struct ipa_context *ipa_ctx;
+
+/*
+ * Tethering client info
+ */
+void ipa_set_client(int index, enum ipacm_client_enum client, bool uplink);
+
+enum ipacm_client_enum ipa_get_client(int pipe_idx);
+
+bool ipa_get_client_uplink(int pipe_idx);
 
 int ipa_send_one(struct ipa_sys_context *sys, struct ipa_desc *desc,
 		bool in_atomic);
@@ -1571,6 +1613,7 @@ int ipa_uc_interface_init(void);
 int ipa_uc_reset_pipe(enum ipa_client_type ipa_client);
 int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable);
 int ipa_uc_state_check(void);
+int ipa_uc_loaded_check(void);
 int ipa_uc_send_cmd(u32 cmd, u32 opcode, u32 expected_status,
 		    bool polling_mode, unsigned long timeout_jiffies);
 void ipa_register_panic_hdlr(void);
@@ -1608,4 +1651,6 @@ void ipa_update_repl_threshold(enum ipa_client_type ipa_client);
 void ipa_flow_control(enum ipa_client_type ipa_client, bool enable,
 			uint32_t qmap_id);
 void ipa_sps_irq_control_all(bool enable);
+void ipa_inc_acquire_wakelock(enum ipa_wakelock_ref_client ref_client);
+void ipa_dec_release_wakelock(enum ipa_wakelock_ref_client ref_client);
 #endif /* _IPA_I_H_ */

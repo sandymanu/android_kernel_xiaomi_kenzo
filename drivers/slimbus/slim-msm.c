@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -532,7 +532,6 @@ void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
 			return;
 		}
 		if (addr == dev->bulk.wr_dma) {
-			SLIM_INFO(dev, "BULK WR complete");
 			dma_unmap_single(dev->dev, dev->bulk.wr_dma,
 					 dev->bulk.size, DMA_TO_DEVICE);
 			if (!dev->bulk.cb)
@@ -542,20 +541,19 @@ void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
 			dev->bulk.in_progress = false;
 			pm_runtime_mark_last_busy(dev->dev);
 			return;
+		} else if (addr < mem->phys_base ||
+			   (addr > (mem->phys_base +
+				    (MSM_TX_BUFS * SLIM_MSGQ_BUF_LEN)))) {
+			SLIM_WARN(dev, "BUF out of bounds:base:0x%pa, io:0x%pa",
+					&mem->phys_base, &addr);
+			continue;
 		}
 		idx = (int) ((addr - mem->phys_base)
 			/ SLIM_MSGQ_BUF_LEN);
-		if (idx < MSM_TX_BUFS && dev->wr_comp[idx]) {
+		if (dev->wr_comp[idx]) {
 			struct completion *comp = dev->wr_comp[idx];
 			dev->wr_comp[idx] = NULL;
 			complete(comp);
-		} else if (idx >= MSM_TX_BUFS) {
-			SLIM_ERR(dev, "BUF out of bounds:base:0x%pa, io:0x%pa",
-					&mem->phys_base, &addr);
-			/* print BAM debug info for TX pipe */
-			sps_get_bam_debug_info(dev->bam.hdl, 93,
-						SPS_BAM_PIPE(4), 0, 2);
-			continue;
 		}
 		if (err) {
 			int i;
@@ -564,10 +562,6 @@ void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
 			/* print the descriptor that resulted in error */
 			for (i = 0; i < (SLIM_MSGQ_BUF_LEN >> 2); i++)
 				SLIM_WARN(dev, "err desc[%d]:0x%x", i, addr[i]);
-			/* print BAM debug info for TX pipe for invalid TX */
-			if (err == -EINVAL)
-				sps_get_bam_debug_info(dev->bam.hdl, 93,
-							SPS_BAM_PIPE(4), 0, 2);
 		}
 		/* reclaim all packets that were delivered out of order */
 		if (idx != dev->tx_head)
@@ -684,10 +678,9 @@ msm_slim_rx_msgq_event(struct msm_slim_ctrl *dev, struct sps_event_notify *ev)
 static void
 msm_slim_handle_rx(struct msm_slim_ctrl *dev, struct sps_event_notify *ev)
 {
-	int ret = 0, index = 0;
+	int ret = 0;
 	u32 mc = 0;
 	u32 mt = 0;
-	u32 buffer[10];
 	u8 msg_len = 0;
 
 	if (ev->event_id != SPS_EVENT_EOT) {
@@ -695,24 +688,34 @@ msm_slim_handle_rx(struct msm_slim_ctrl *dev, struct sps_event_notify *ev)
 					__func__, ev->event_id);
 		return;
 	}
+
 	do {
-		ret = msm_slim_rx_msgq_get(dev, buffer, index);
-		if (ret) {
+		ret = msm_slim_rx_msgq_get(dev, dev->current_rx_buf,
+					   dev->current_count);
+		if (ret == -ENODATA) {
+			return;
+		} else if (ret) {
 			SLIM_ERR(dev, "rx_msgq_get() failed 0x%x\n",
 								ret);
 			return;
 		}
 
 		/* Traverse first byte of message for message length */
-		if (index++ == 0) {
-			msg_len = *buffer & 0x1F;
-			mt = (buffer[0] >> 5) & 0x7;
-			mc = (buffer[0] >> 8) & 0xff;
+		if (dev->current_count++ == 0) {
+			msg_len = *(dev->current_rx_buf) & 0x1F;
+			mt = (*(dev->current_rx_buf) >> 5) & 0x7;
+			mc = (*(dev->current_rx_buf) >> 8) & 0xff;
 			dev_dbg(dev->dev, "MC: %x, MT: %x\n", mc, mt);
 		}
+
 		msg_len = (msg_len < 4) ? 0 : (msg_len - 4);
-	} while (msg_len);
-	dev->rx_slim(dev, (u8 *)buffer);
+
+		if (!msg_len) {
+			dev->rx_slim(dev, (u8 *)dev->current_rx_buf);
+			dev->current_count = 0;
+		}
+
+	} while (1);
 }
 
 static void msm_slim_rx_msgq_cb(struct sps_event_notify *notify)
@@ -763,8 +766,12 @@ int msm_slim_rx_msgq_get(struct msm_slim_ctrl *dev, u32 *data, int offset)
 	addr = DESC_FULL_ADDR(iovec.flags, iovec.addr);
 	pr_debug("iovec = (0x%x 0x%x 0x%x)\n",
 		iovec.addr, iovec.size, iovec.flags);
-	BUG_ON(addr < mem->phys_base);
-	BUG_ON(addr >= mem->phys_base + mem->size);
+
+	/* no more descriptors */
+	if (!ret && (iovec.addr == 0) && (iovec.size == 0)) {
+		ret = -ENODATA;
+		goto err_exit;
+	}
 
 	/* Calculate buffer index */
 	index = (addr - mem->phys_base) / 4;
@@ -1392,15 +1399,12 @@ static void msm_slim_qmi_recv_msg(struct kthread_work *work)
 	struct msm_slim_qmi *qmi =
 			container_of(work, struct msm_slim_qmi, kwork);
 
-	/* Make sure to empty the QMI buffer by reading all the messages
-	 * IF QMI buffer is not empty flow control blocks ADSP from
-	 * sending other messages.
-	 */
+	/* Drain all packets received */
 	do {
-	} while ((rc = qmi_recv_msg(qmi->handle)) == 0);
-
+		rc = qmi_recv_msg(qmi->handle);
+	} while (rc == 0);
 	if (rc != -ENOMSG)
-		pr_err("%s: Error receiving QMI message\n", __func__);
+		pr_err("%s: Error receiving QMI message:%d\n", __func__, rc);
 }
 
 static void msm_slim_qmi_notify(struct qmi_handle *handle,
@@ -1532,7 +1536,7 @@ int msm_slim_qmi_init(struct msm_slim_ctrl *dev, bool apps_is_master)
 	}
 
 	/* Instance is 0 based */
-	req.instance = dev->ctrl.nr - 1;
+	req.instance = (dev->ctrl.nr >> 1);
 	req.mode_valid = 1;
 
 	/* Mode indicates the role of the ADSP */

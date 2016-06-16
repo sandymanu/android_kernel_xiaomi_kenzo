@@ -45,7 +45,7 @@ static int mmc_prep_request(struct request_queue *q, struct request *req)
 		return BLKPREP_KILL;
 	}
 
-	if (mq && mmc_card_removed(mq->card))
+	if (mq && (mmc_card_removed(mq->card) || mmc_access_rpmb(mq)))
 		return BLKPREP_KILL;
 
 	req->cmd_flags |= REQ_DONTPREP;
@@ -68,6 +68,9 @@ static inline bool mmc_cmdq_should_pull_reqs(struct mmc_host *host,
 		ret = false;
 	else if (test_bit(CMDQ_STATE_ERR, &ctx->curr_state))
 		ret = false;
+	else if (!host->card->part_curr && mmc_host_cq_disable(host) &&
+			!mmc_card_suspended(host->card))
+		return false;
 
 	if (!ret)
 		pr_debug("%s: %s: skip pulling reqs: state: %lu, cmd_flags: 0x%x\n",
@@ -103,7 +106,9 @@ static int mmc_cmdq_thread(void *d)
 			spin_unlock_irqrestore(q->queue_lock, flags);
 			if (ret) {
 				test_and_set_bit(0, &ctx->req_starved);
-				schedule();
+				up(&mq->thread_sem);
+				schedule_timeout(HZ / 100);
+				down(&mq->thread_sem);
 			} else {
 				if (!mmc_cmdq_should_pull_reqs(host, ctx,
 							       req)) {
@@ -112,19 +117,16 @@ static int mmc_cmdq_thread(void *d)
 					spin_unlock_irqrestore(q->queue_lock,
 							       flags);
 					test_and_set_bit(0, &ctx->req_starved);
-					schedule();
+					up(&mq->thread_sem);
+					schedule_timeout(HZ / 100);
+					down(&mq->thread_sem);
 					continue;
 				}
 				set_current_state(TASK_RUNNING);
 				ret = mq->cmdq_issue_fn(mq, req);
-				if (ret) {
-					pr_err("%s: failed (%d) to issue req, requeue\n",
-					       mmc_hostname(host), ret);
-					spin_lock_irqsave(q->queue_lock, flags);
-					blk_requeue_request(q, req);
-					spin_unlock_irqrestore(q->queue_lock,
-							       flags);
-				}
+				if (ret)
+					pr_err("%s: error while cmdq issuing req\n",
+							mmc_hostname(host));
 			}
 		} else {
 			spin_unlock_irqrestore(q->queue_lock, flags);
@@ -342,6 +344,9 @@ void mmc_cmdq_setup_queue(struct mmc_queue *mq, struct mmc_card *card)
 {
 	u64 limit = BLK_BOUNCE_HIGH;
 	struct mmc_host *host = card->host;
+
+	if (mmc_dev(host)->dma_mask && *mmc_dev(host)->dma_mask)
+		limit = *mmc_dev(host)->dma_mask;
 
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, mq->queue);
 	if (mmc_can_erase(card))

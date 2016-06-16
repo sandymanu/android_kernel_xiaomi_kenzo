@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,7 +22,6 @@
 
 #define MASK_BUFFER_SIZE 256
 #define FOUR_MB 4
-#define USER_APP_START_UID 10000
 #define YEAR_BASE 1900
 
 static struct seemp_logk_dev *slogk_dev;
@@ -55,7 +54,6 @@ static long seemp_logk_reserve_rdblks(
 static long seemp_logk_set_mask(unsigned long arg);
 static long seemp_logk_set_mapping(unsigned long arg);
 static long seemp_logk_check_filter(unsigned long arg);
-static int get_uid_from_message_for_system_event(const char *buffer);
 
 void* (*seemp_logk_kernel_begin)(char **buf);
 
@@ -149,85 +147,15 @@ void *seemp_logk_kernel_start_record(char **buf)
 
 void seemp_logk_kernel_end_record(void *blck)
 {
-	int current_uid = 0;
-	int parsed_current_uid = 0;
 	struct seemp_logk_blk *blk = (struct seemp_logk_blk *)blck;
 
 	if (blk) {
 		/*update status at the very end*/
 		blk->status |= 0x1;
-		current_uid = current_uid();
-		if (current_uid < USER_APP_START_UID) {
-			parsed_current_uid =
-			get_uid_from_message_for_system_event(blk->payload.msg);
-			if (parsed_current_uid != -1)
-				blk->uid = parsed_current_uid;
-			else
-				blk->uid = current_uid;
-		} else
-			blk->uid = current_uid;
+		blk->uid = current_uid();
 
 		ringbuf_finish_writer(slogk_dev, blk);
 	}
-}
-
-/*
- * get_uid_from_message_for_system_event() - helper function to get the
- * uid of the actual app that is changing the state and updating it
- * accordingly rather than with the system UID = 1000
- * NOTE: Not a very efficient implementation. This does a N*8 character
- * comparisons everytime a message with UID less than 10000 is seen
- */
-static int get_uid_from_message_for_system_event(const char *buffer)
-{
-	char asciiuid[6];
-	long appuid = 0;
-	int aindex = 0;
-	char *comparator_string = "app_uid=";
-	int ret = 0;
-
-	char *p1 = (char *)buffer;
-
-	while (*p1) {
-		char *p1begin = p1;
-		char *p2 = (char *)comparator_string;
-
-		aindex = 0;
-
-		while (*p1 && *p2 && *p1 == *p2) {
-			p1++;
-			p2++;
-		}
-
-		if (*p2 == '\0') {
-			while ((*p1) && (aindex < 5)
-				&& (*p1 != ',')) {
-				asciiuid[aindex++] = *p1;
-				p1++;
-			}
-			if (*p1 != ',') {
-				pr_err("Failed to get app_id\n");
-				return -EPERM;
-			}
-			asciiuid[aindex] = '\0';
-
-			/*
-			 * now get the integer value of this ascii
-			 * string number
-			 */
-			ret = kstrtol(asciiuid, 10, &appuid);
-			if (ret != 0) {
-				pr_err("failed in the kstrtol function uid:%s\n",
-						asciiuid);
-				return ret;
-			} else {
-				return (int)(appuid);
-			}
-		}
-
-		p1 = p1begin + 1;
-	}
-	return -EPERM;
 }
 
 static int seemp_logk_usr_record(const char __user *buf, size_t count)
@@ -238,8 +166,7 @@ static int seemp_logk_usr_record(const char __user *buf, size_t count)
 	struct timespec now;
 	struct tm ts;
 	int idx, ret;
-	int currentuid;
-	int parsedcurrentuid;
+
 	DEFINE_WAIT(write_wait);
 
 	if (buf) {
@@ -301,16 +228,7 @@ static int seemp_logk_usr_record(const char __user *buf, size_t count)
 
 	memcpy(&blk->payload, &usr_blk.payload, sizeof(struct blk_payload));
 	blk->pid = usr_blk.pid;
-	currentuid = usr_blk.uid;
-	if (currentuid <= USER_APP_START_UID) {
-		parsedcurrentuid = get_uid_from_message_for_system_event
-							(blk->payload.msg);
-		if (parsedcurrentuid != -EPERM)
-			blk->uid = parsedcurrentuid;
-		else
-			blk->uid = currentuid;
-	} else
-		blk->uid = currentuid;
+	blk->uid = usr_blk.uid;
 	blk->tid = usr_blk.tid;
 	blk->sec = now.tv_sec;
 	blk->nsec = now.tv_nsec;
@@ -678,7 +596,7 @@ __init int seemp_logk_init(void)
 	}
 
 	slogk_dev = kmalloc(sizeof(*slogk_dev), GFP_KERNEL);
-	if (!slogk_dev)
+	if (slogk_dev == NULL)
 		return -ENOMEM;
 
 	slogk_dev->ring_sz = ring_sz;

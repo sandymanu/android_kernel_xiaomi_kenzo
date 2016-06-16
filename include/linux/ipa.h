@@ -229,6 +229,13 @@ struct ipa_ep_cfg_mode {
  *			aggregation closure. Valid for Output Pipes only (IPA
  *			Producer). EOF affects only Pipes configured for
  *			generic aggregation.
+ * @aggr_sw_eof_active: 0: EOF does not close aggregation. HW closes
+ *			aggregation (sends EOT) only based on its aggregation config
+ *			(byte/time limit, etc).
+ *			1: EOF closes aggregation in addition to HW based
+ *			aggregation closure. Valid for Output Pipes only (IPA
+ *			Producer). EOF affects only Pipes configured for generic
+ *			aggregation.
  */
 struct ipa_ep_cfg_aggr {
 	enum ipa_aggr_en_type aggr_en;
@@ -236,6 +243,7 @@ struct ipa_ep_cfg_aggr {
 	u32 aggr_byte_limit;
 	u32 aggr_time_limit;
 	u32 aggr_pkt_limit;
+	bool aggr_sw_eof_active;
 };
 
 /**
@@ -1328,6 +1336,15 @@ int teth_bridge_disconnect(enum ipa_client_type client);
 int teth_bridge_connect(struct teth_bridge_connect_params *connect_params);
 
 /*
+ * Tethering client info
+ */
+void ipa_set_client(int index, enum ipacm_client_enum client, bool uplink);
+
+enum ipacm_client_enum ipa_get_client(int pipe_idx);
+
+bool ipa_get_client_uplink(int pipe_idx);
+
+/*
  * ODU bridge
  */
 
@@ -1938,6 +1955,25 @@ static inline int teth_bridge_connect(struct teth_bridge_connect_params
 {
 	return -EPERM;
 }
+
+/*
+ * Tethering client info
+ */
+static inline void ipa_set_client(int index, enum ipacm_client_enum client,
+	bool uplink)
+{
+}
+
+static inline enum ipacm_client_enum ipa_get_client(int pipe_idx)
+{
+	return -EPERM;
+}
+
+static inline bool ipa_get_client_uplink(int pipe_idx)
+{
+	return -EPERM;
+}
+
 
 /*
  * ODU bridge

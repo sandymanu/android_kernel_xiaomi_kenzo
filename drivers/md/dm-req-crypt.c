@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -42,7 +42,7 @@
 #define MAX_SG_LIST	1024
 #define REQ_DM_512_KB (512*1024)
 #define MAX_ENCRYPTION_BUFFERS 1
-#define MIN_IOS 16
+#define MIN_IOS 256
 #define MIN_POOL_PAGES 32
 #define KEY_SIZE_XTS 32
 #define AES_XTS_IV_LEN 16
@@ -879,10 +879,9 @@ static int req_crypt_endio(struct dm_target *ti, struct request *clone,
 	struct bio_vec *bvec = NULL;
 	struct req_dm_crypt_io *req_io = map_context->ptr;
 
-	/* If it is a write request, do nothing just return. */
+	/* If it is for ICE, free up req_io and return */
 	bvec = NULL;
-	if (encryption_mode == DM_REQ_CRYPT_ENCRYPTION_MODE_TRANSPARENT
-		&& rq_data_dir(clone) == READ) {
+	if (encryption_mode == DM_REQ_CRYPT_ENCRYPTION_MODE_TRANSPARENT) {
 		mempool_free(req_io, req_io_pool);
 		goto submit_request;
 	}
@@ -923,6 +922,7 @@ static int req_crypt_map(struct dm_target *ti, struct request *clone,
 	struct req_dm_crypt_io *req_io = NULL;
 	int error = DM_REQ_CRYPT_ERROR, copy_bio_sector_to_req = 0;
 	struct bio *bio_src = NULL;
+	gfp_t gfp_flag = GFP_KERNEL;
 
 	if ((rq_data_dir(clone) != READ) &&
 			 (rq_data_dir(clone) != WRITE)) {
@@ -931,9 +931,13 @@ static int req_crypt_map(struct dm_target *ti, struct request *clone,
 		goto submit_request;
 	}
 
-	req_io = mempool_alloc(req_io_pool, GFP_NOWAIT);
+	if (in_interrupt() || irqs_disabled())
+		gfp_flag = GFP_NOWAIT;
+
+	req_io = mempool_alloc(req_io_pool, gfp_flag);
 	if (!req_io) {
 		DMERR("%s req_io allocation failed\n", __func__);
+		BUG();
 		error = DM_REQ_CRYPT_ERROR;
 		goto submit_request;
 	}
@@ -1016,6 +1020,11 @@ submit_request:
 
 static void deconfigure_qcrypto(void)
 {
+	if (req_page_pool) {
+		mempool_destroy(req_page_pool);
+		req_page_pool = NULL;
+	}
+
 	if (req_scatterlist_pool) {
 		mempool_destroy(req_scatterlist_pool);
 		req_scatterlist_pool = NULL;
@@ -1050,10 +1059,6 @@ static void req_crypt_dtr(struct dm_target *ti)
 {
 	DMDEBUG("dm-req-crypt Destructor.\n");
 
-	if (req_page_pool) {
-		mempool_destroy(req_page_pool);
-		req_page_pool = NULL;
-	}
 	if (req_io_pool) {
 		mempool_destroy(req_io_pool);
 		req_io_pool = NULL;
@@ -1091,6 +1096,7 @@ static int configure_qcrypto(void)
 	if (IS_ERR(tfm)) {
 		DMERR("%s ablkcipher tfm allocation failed : error\n",
 						 __func__);
+		tfm = NULL;
 		goto exit_err;
 	}
 
@@ -1178,7 +1184,17 @@ static int configure_qcrypto(void)
 	}
 	req_scatterlist_pool = mempool_create_slab_pool(MIN_IOS,
 					_req_dm_scatterlist_pool);
-	BUG_ON(!req_scatterlist_pool);
+	if (!req_scatterlist_pool) {
+		DMERR("%s req_scatterlist_pool is not allocated\n", __func__);
+		err = -ENOMEM;
+		goto exit_err;
+	}
+
+	req_page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
+	if (!req_page_pool) {
+		DMERR("%s req_page_pool not allocated\n", __func__);
+		goto exit_err;
+	}
 
 	err = 0;
 
@@ -1291,20 +1307,18 @@ static int req_crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	req_io_pool = mempool_create_slab_pool(MIN_IOS, _req_crypt_io_pool);
-	BUG_ON(!req_io_pool);
 	if (!req_io_pool) {
 		DMERR("%s req_io_pool not allocated\n", __func__);
-		err =  DM_REQ_CRYPT_ERROR;
+		err = -ENOMEM;
 		goto ctr_exit;
 	}
 
-	req_page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
-	if (!req_page_pool) {
-		DMERR("%s req_page_pool not allocated\n", __func__);
-		err =  DM_REQ_CRYPT_ERROR;
-		goto ctr_exit;
-	}
-
+	/*
+	 * If underlying device supports flush/discard, mapped target
+	 * should also allow it
+	 */
+	ti->num_flush_bios = 1;
+	ti->num_discard_bios = 1;
 
 	/*
 	 * If underlying device supports flush, mapped target should

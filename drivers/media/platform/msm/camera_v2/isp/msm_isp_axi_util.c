@@ -328,6 +328,9 @@ void msm_isp_axi_reserve_wm(struct vfe_device *vfe_dev,
 			vfe_dev->pdev->id,
 			stream_info->stream_handle, j);
 		stream_info->wm[i] = j;
+		if (stream_info->stream_src > IDEAL_RAW)
+			vfe_dev->axi_data.rdi_wm_mask |=
+				((1 << j) << (8 * (stream_info->stream_src - RDI_INTF_0)));
 	}
 }
 
@@ -339,6 +342,9 @@ void msm_isp_axi_free_wm(struct msm_vfe_axi_shared_data *axi_data,
 	for (i = 0; i < stream_info->num_planes; i++) {
 		axi_data->free_wm[stream_info->wm[i]] = 0;
 		axi_data->num_used_wm--;
+		if (stream_info->stream_src > IDEAL_RAW)
+			axi_data->rdi_wm_mask &=
+				~((1 << stream_info->wm[i]) << (8 * (stream_info->stream_src - RDI_INTF_0)));
 	}
 	if (stream_info->stream_src <= IDEAL_RAW) {
 		axi_data->num_pix_stream++;
@@ -1438,8 +1444,7 @@ static int msm_isp_cfg_ping_pong_address(struct vfe_device *vfe_dev,
 			vfe_dev->pdev->id, bufq_handle, &buf, &buf_cnt,
 			pingpong_bit);
 		if (rc == -EFAULT) {
-			msm_isp_halt_send_error(vfe_dev,
-				ISP_EVENT_BUF_FATAL_ERROR);
+			pr_err("%s: get_buf fail\n", __func__);
 			return rc;
 		}
 		if (rc < 0 || buf == NULL) {
@@ -3172,6 +3177,11 @@ void msm_isp_process_axi_irq(struct vfe_device *vfe_dev,
 				&vfe_dev->common_data->common_dev_axi_lock,
 				axi_flags);
 
+			if (rc == -EFAULT) {
+				msm_isp_halt_send_error(vfe_dev,
+					ISP_EVENT_BUF_FATAL_ERROR);
+				return;
+			}
 			if (done_buf && !rc)
 				msm_isp_process_done_buf(vfe_dev, stream_info,
 					done_buf, ts);

@@ -62,6 +62,7 @@ static void sdhci_finish_data(struct sdhci_host *);
 static void sdhci_send_command(struct sdhci_host *, struct mmc_command *);
 static void sdhci_finish_command(struct sdhci_host *);
 static int sdhci_execute_tuning(struct mmc_host *mmc, u32 opcode);
+static int sdhci_enhanced_strobe(struct mmc_host *mmc);
 static void sdhci_tuning_timer(unsigned long data);
 static void sdhci_enable_preset_value(struct sdhci_host *host, bool enable);
 static bool sdhci_check_state(struct sdhci_host *);
@@ -103,6 +104,9 @@ static void sdhci_dump_state(struct sdhci_host *host)
 {
 	struct mmc_host *mmc = host->mmc;
 
+	pr_info("%s: eMMC FW version: 0x%02x Manfid: 0x%06x\n",
+		mmc_hostname(mmc), get_mmc_fw_version(host->mmc->card),
+		get_mmc_manfid(host->mmc->card));
 	pr_info("%s: clk: %d clk-gated: %d claimer: %s pwr: %d\n",
 		mmc_hostname(mmc), host->clock, mmc->clk_gated,
 		mmc->claimer->comm, host->pwr);
@@ -924,6 +928,11 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_command *cmd)
 
 	if (host->flags & (SDHCI_USE_SDMA | SDHCI_USE_ADMA))
 		host->flags |= SDHCI_REQ_USE_DMA;
+
+	if ((host->quirks2 & SDHCI_QUIRK2_USE_PIO_FOR_EMMC_TUNING) &&
+		(cmd->opcode ==  MMC_SEND_TUNING_BLOCK_HS200 ||
+		cmd->opcode == MMC_SEND_TUNING_BLOCK_HS400))
+		host->flags &= ~SDHCI_REQ_USE_DMA;
 
 	/*
 	 * FIXME: This doesn't account for merging when mapping the
@@ -2551,6 +2560,19 @@ static int sdhci_card_busy(struct mmc_host *mmc)
 	return !(present_state & SDHCI_DATA_LVL_MASK);
 }
 
+static int sdhci_enhanced_strobe(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+	int err = -EINVAL;
+
+	sdhci_runtime_pm_get(host);
+	if (host->ops->enhanced_strobe)
+		err = host->ops->enhanced_strobe(host);
+	sdhci_runtime_pm_put(host);
+
+	return err;
+}
+
 static int sdhci_execute_tuning(struct mmc_host *mmc, u32 opcode)
 {
 	struct sdhci_host *host;
@@ -2872,6 +2894,7 @@ static const struct mmc_host_ops sdhci_ops = {
 	.enable_sdio_irq = sdhci_enable_sdio_irq,
 	.start_signal_voltage_switch	= sdhci_start_signal_voltage_switch,
 	.execute_tuning			= sdhci_execute_tuning,
+	.enhanced_strobe		= sdhci_enhanced_strobe,
 	.card_event			= sdhci_card_event,
 	.card_busy	= sdhci_card_busy,
 	.enable		= sdhci_enable,
@@ -3142,9 +3165,10 @@ static void sdhci_data_irq(struct sdhci_host *host, u32 intmask)
 
 	/* CMD19 generates _only_ Buffer Read Ready interrupt */
 	if (intmask & SDHCI_INT_DATA_AVAIL) {
-		if (command == MMC_SEND_TUNING_BLOCK ||
-		    command == MMC_SEND_TUNING_BLOCK_HS200 ||
-		    command == MMC_SEND_TUNING_BLOCK_HS400) {
+		if (!(host->quirks2 & SDHCI_QUIRK2_NON_STANDARD_TUNING) &&
+			(command == MMC_SEND_TUNING_BLOCK ||
+			command == MMC_SEND_TUNING_BLOCK_HS200 ||
+			command == MMC_SEND_TUNING_BLOCK_HS400)) {
 			host->tuning_done = 1;
 			wake_up(&host->buf_ready_int);
 			return;
@@ -3281,19 +3305,21 @@ static irqreturn_t sdhci_cmdq_irq(struct sdhci_host *host, u32 intmask)
 {
 	int err = 0;
 	u32 mask = 0;
+	irqreturn_t ret;
 
 	if (intmask & SDHCI_INT_CMD_MASK)
 		err = sdhci_get_cmd_err(intmask);
 	else if (intmask & SDHCI_INT_DATA_MASK)
 		err = sdhci_get_data_err(intmask);
 
+	ret = cmdq_irq(host->mmc, err);
 	if (err) {
 		/* Clear the error interrupts */
 		mask = intmask & SDHCI_INT_ERROR_MASK;
 		sdhci_writel(host, mask, SDHCI_INT_STATUS);
 	}
+	return ret;
 
-	return cmdq_irq(host->mmc, err);
 }
 
 #else
@@ -3727,6 +3753,24 @@ static int sdhci_is_adma2_64bit(struct sdhci_host *host)
 #endif
 
 #ifdef CONFIG_MMC_CQ_HCI
+static void sdhci_cmdq_set_transfer_params(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+	u8 ctrl;
+
+	if (host->version >= SDHCI_SPEC_200) {
+		ctrl = sdhci_readb(host, SDHCI_HOST_CONTROL);
+		ctrl &= ~SDHCI_CTRL_DMA_MASK;
+		if (host->flags & SDHCI_USE_ADMA_64BIT)
+			ctrl |= SDHCI_CTRL_ADMA64;
+		else
+			ctrl |= SDHCI_CTRL_ADMA32;
+		sdhci_writeb(host, ctrl, SDHCI_HOST_CONTROL);
+	}
+	if (host->ops->toggle_cdr)
+		host->ops->toggle_cdr(host, false);
+}
+
 static void sdhci_cmdq_clear_set_irqs(struct mmc_host *mmc, bool clear)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
@@ -3777,6 +3821,14 @@ static void sdhci_cmdq_set_block_size(struct mmc_host *mmc)
 	sdhci_set_blk_size_reg(host, 512, 0);
 }
 
+static void sdhci_enhanced_strobe_mask(struct mmc_host *mmc, bool set)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+
+	if (host->ops->enhanced_strobe_mask)
+		host->ops->enhanced_strobe_mask(host, set);
+}
+
 static void sdhci_cmdq_clear_set_dumpregs(struct mmc_host *mmc, bool set)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
@@ -3823,6 +3875,10 @@ static void sdhci_cmdq_update_pm_qos(struct mmc_host *mmc,
 }
 
 #else
+static void sdhci_cmdq_set_transfer_params(struct mmc_host *mmc)
+{
+
+}
 static void sdhci_cmdq_clear_set_irqs(struct mmc_host *mmc, bool clear)
 {
 
@@ -3845,6 +3901,11 @@ static int sdhci_cmdq_init(struct sdhci_host *host, struct mmc_host *mmc,
 }
 
 static void sdhci_cmdq_set_block_size(struct mmc_host *mmc)
+{
+
+}
+
+static void sdhci_enhanced_strobe_mask(struct mmc_host *mmc, bool set)
 {
 
 }
@@ -3878,10 +3939,12 @@ static const struct cmdq_host_ops sdhci_cmdq_ops = {
 	.dump_vendor_regs = sdhci_cmdq_dump_vendor_regs,
 	.set_block_size = sdhci_cmdq_set_block_size,
 	.clear_set_dumpregs = sdhci_cmdq_clear_set_dumpregs,
+	.enhanced_strobe_mask = sdhci_enhanced_strobe_mask,
 	.crypto_cfg	= sdhci_cmdq_crypto_cfg,
 	.crypto_cfg_reset	= sdhci_cmdq_crypto_cfg_reset,
 	.post_cqe_halt = sdhci_cmdq_post_cqe_halt,
 	.pm_qos_update = sdhci_cmdq_update_pm_qos,
+	.set_transfer_params = sdhci_cmdq_set_transfer_params,
 };
 
 int sdhci_add_host(struct sdhci_host *host)
@@ -4045,7 +4108,10 @@ int sdhci_add_host(struct sdhci_host *host)
 			>> SDHCI_CLOCK_BASE_SHIFT;
 
 	host->max_clk *= 1000000;
-	sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
+	if (mmc->caps2 & MMC_CAP2_CLK_SCALE)
+		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
+	else
+		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE);
 	if (host->max_clk == 0 || host->quirks &
 			SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN) {
 		if (!host->ops->get_max_clock) {

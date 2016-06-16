@@ -209,6 +209,7 @@ static int ov5670_read_eeprom_memory(struct msm_eeprom_ctrl_t *e_ctrl,
 	return rc;
 
 }
+
 /**
   * read_eeprom_memory() - read map data into buffer
   * @e_ctrl:	eeprom control struct
@@ -539,6 +540,7 @@ static int msm_eeprom_power_up(struct msm_eeprom_ctrl_t *e_ctrl,
 	}
 	return rc;
 }
+
 
 /**
   * msm_eeprom_power_up - Do power up, parse and power down
@@ -918,14 +920,6 @@ static int msm_eeprom_i2c_probe(struct i2c_client *client,
 	e_ctrl->msm_sd.sd.entity.type = MEDIA_ENT_T_V4L2_SUBDEV;
 	e_ctrl->msm_sd.sd.entity.group_id = MSM_CAMERA_SUBDEV_EEPROM;
 	msm_sd_register(&e_ctrl->msm_sd);
-
-#ifdef CONFIG_COMPAT
-	msm_eeprom_v4l2_subdev_fops = v4l2_subdev_fops;
-	msm_eeprom_v4l2_subdev_fops.compat_ioctl32 =
-		msm_eeprom_subdev_fops_ioctl32;
-	e_ctrl->msm_sd.sd.devnode->fops = &msm_eeprom_v4l2_subdev_fops;
-#endif
-
 	CDBG("%s success result=%d X\n", __func__, rc);
 	return rc;
 
@@ -1840,7 +1834,7 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 		else
 			rc = read_eeprom_memory(e_ctrl, &e_ctrl->cal_data);
 		if (rc < 0) {
-			pr_err("  %s read_eeprom_memory failed\n", __func__);
+			pr_err("%s read_eeprom_memory failed\n", __func__);
 			goto power_down;
 		}
 		for (j = 0; j < e_ctrl->cal_data.num_data; j++)

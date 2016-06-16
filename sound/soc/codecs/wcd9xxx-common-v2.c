@@ -309,9 +309,9 @@ static void wcd_clsh_set_hph_mode(struct snd_soc_codec *codec,
 				    0x30, (res_val << 4));
 		if (mode != CLS_H_LP)
 			snd_soc_update_bits(codec, WCD9XXX_HPH_REFBUFF_UHQA_CTL,
-			0x07, gain);
+					    0x07, gain);
 		snd_soc_update_bits(codec, WCD9XXX_CLASSH_CTRL_CCL_1,
-			0xF0, (ipeak << 4));
+				    0xF0, (ipeak << 4));
 	}
 }
 
@@ -332,7 +332,7 @@ static void wcd_clsh_set_buck_regulator_mode(struct snd_soc_codec *codec,
 					     int mode)
 {
 	snd_soc_update_bits(codec, WCD9XXX_A_ANA_RX_SUPPLIES,
-		0x02, 0x00);
+			    0x02, 0x00);
 }
 
 static void wcd_clsh_state_lo(struct snd_soc_codec *codec,
@@ -530,12 +530,12 @@ static void wcd_clsh_state_hph_lo(struct snd_soc_codec *codec,
 		    (req_state == WCD_CLSH_STATE_HPHR)) {
 			if (req_state == WCD_CLSH_STATE_HPHL)
 				snd_soc_update_bits(codec,
-						WCD9XXX_A_CDC_RX1_RX_PATH_CFG0,
-						0x40, 0x00);
+					    WCD9XXX_A_CDC_RX1_RX_PATH_CFG0,
+					    0x40, 0x00);
 			if (req_state == WCD_CLSH_STATE_HPHR)
 				snd_soc_update_bits(codec,
-						WCD9XXX_A_CDC_RX2_RX_PATH_CFG0,
-						0x40, 0x00);
+					    WCD9XXX_A_CDC_RX2_RX_PATH_CFG0,
+					    0x40, 0x00);
 			/*
 			 * If HPH is powering down first, then disable clsh,
 			 * set the buck/flyback mode to default and keep the
@@ -903,6 +903,7 @@ int wcd_clsh_get_clsh_state(struct wcd_clsh_cdc_data *clsh)
 	return clsh->state;
 }
 EXPORT_SYMBOL(wcd_clsh_get_clsh_state);
+
 void wcd_clsh_init(struct wcd_clsh_cdc_data *clsh)
 {
 	int i;

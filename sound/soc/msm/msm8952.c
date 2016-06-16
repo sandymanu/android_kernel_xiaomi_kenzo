@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 #include <sound/pcm.h>
 #include <sound/jack.h>
 #include <sound/q6afe-v2.h>
+#include <sound/q6core.h>
 #include <soc/qcom/socinfo.h>
 #include "qdsp6v2/msm-pcm-routing-v2.h"
 #include "msm-audio-pinctrl.h"
@@ -75,6 +76,8 @@ static bool msm8952_swap_gnd_mic(struct snd_soc_codec *codec);
 static int msm8952_mclk_event(struct snd_soc_dapm_widget *w,
 			      struct snd_kcontrol *kcontrol, int event);
 static int msm8952_wsa_switch_event(struct snd_soc_dapm_widget *w,
+			      struct snd_kcontrol *kcontrol, int event);
+static int msm8952_ext_audio_switch_event(struct snd_soc_dapm_widget *w,
 			      struct snd_kcontrol *kcontrol, int event);
 
 /*
@@ -172,6 +175,9 @@ static const struct snd_soc_dapm_widget msm8952_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("VDD_WSA_SWITCH", SND_SOC_NOPM, 0, 0,
 	msm8952_wsa_switch_event,
 	SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_SUPPLY("VDD_EXT_AUDIO_SWITCH", SND_SOC_NOPM, 0, 0,
+			    msm8952_ext_audio_switch_event,
+			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
 int is_ext_spk_gpio_support(struct platform_device *pdev,
@@ -197,6 +203,92 @@ int is_ext_spk_gpio_support(struct platform_device *pdev,
 	return 0;
 }
 
+static int ext_audio_switch_support(struct platform_device *pdev,
+			struct msm8916_asoc_mach_data *pdata)
+{
+	const char *ext_audio_switch = "qcom,msm-ext-audio-switch";
+	const char *ext_switch_supply = "ext-switch-vdd";
+	const char *ext_switch_voltage = "qcom,ext-switch-vdd-voltage";
+	const char *ext_switch_op_cur = "qcom,ext-switch-vdd-op-mode";
+	enum of_gpio_flags flags;
+	int rc = -EINVAL;
+
+	pdata->ext_audio_switch_gpio = of_get_named_gpio_flags
+		(pdev->dev.of_node, ext_audio_switch, 0, &flags);
+
+	if (pdata->ext_audio_switch_gpio < 0) {
+		dev_dbg(&pdev->dev,
+			"%s: missing %s in dt node\n",
+			__func__, ext_audio_switch);
+		goto err;
+	} else {
+		u32 minmax[2], op_mode;
+		int len = 0;
+
+		rc = gpio_is_valid(pdata->ext_audio_switch_gpio);
+		if (!rc) {
+			dev_err(&pdev->dev, "%s: Invalid audio switch gpio : %d",
+				__func__, pdata->ext_audio_switch_gpio);
+			goto err;
+		}
+
+		pdata->ext_audio_switch_active_high =
+			!(flags & OF_GPIO_ACTIVE_LOW);
+		pdata->ext_audio_switch_supply =
+			devm_regulator_get(&pdev->dev, ext_switch_supply);
+
+		if (IS_ERR(pdata->ext_audio_switch_supply)) {
+			rc = PTR_ERR(pdata->ext_audio_switch_supply);
+			dev_err(&pdev->dev, "%s: ext-switch-vdd-supply not defined: err:%d",
+				__func__, rc);
+			goto err;
+		}
+
+		if (of_get_property(pdev->dev.of_node,
+				    ext_switch_voltage,
+				    &len) && (len == sizeof(minmax))) {
+			of_property_read_u32_array(pdev->dev.of_node,
+						   ext_switch_voltage,
+						   minmax, 2);
+		} else {
+			dev_err(&pdev->dev, "%s: voltage not properly defined",
+				__func__);
+			goto err;
+		}
+
+		rc = of_property_read_u32(pdev->dev.of_node,
+					  ext_switch_op_cur, &op_mode);
+		if (rc) {
+			dev_err(&pdev->dev, "%s: op-mode current not defined",
+				__func__);
+			goto err;
+		}
+		rc = regulator_set_voltage(pdata->ext_audio_switch_supply,
+					   minmax[0], minmax[1]);
+		if (rc) {
+			dev_err(&pdev->dev,
+				"%s: Error setting ext_audio_switch_reg volt, err=%d\n",
+				__func__, rc);
+			goto  err;
+		}
+
+		rc = regulator_set_optimum_mode(pdata->ext_audio_switch_supply,
+						op_mode);
+		if (rc < 0) {
+			dev_err(&pdev->dev,
+				"%s: Error setting optimum_mode, err=%d\n",
+				__func__, rc);
+			goto  err;
+		}
+		return 0;
+	}
+err:
+	pdata->ext_audio_switch_supply = NULL;
+	pdata->ext_audio_switch_gpio = -1;
+
+	return -EINVAL;
+}
+
 static int enable_spk_ext_pa(struct snd_soc_codec *codec, int enable)
 {
 	struct snd_soc_card *card = codec->card;
@@ -220,6 +312,12 @@ static int enable_spk_ext_pa(struct snd_soc_codec *codec, int enable)
 			return ret;
 		}
 		gpio_set_value_cansleep(pdata->spk_ext_pa_gpio, enable);
+
+		/* Some devices have secondary GPIO that needs to set */
+		if (pdata->ext_audio_switch_gpio > 0) {
+			gpio_set_value_cansleep(pdata->ext_audio_switch_gpio,
+				pdata->ext_audio_switch_active_high);
+		}
 	} else {
 		gpio_set_value_cansleep(pdata->spk_ext_pa_gpio, enable);
 		ret = msm_gpioset_suspend(CLIENT_WCD_INT, "ext_spk_gpio");
@@ -966,6 +1064,35 @@ static int msm8952_wsa_switch_event(struct snd_soc_dapm_widget *w,
 	return ret;
 }
 
+static int msm8952_ext_audio_switch_event(struct snd_soc_dapm_widget *w,
+			      struct snd_kcontrol *kcontrol, int event)
+{
+	int ret = 0;
+	struct msm8916_asoc_mach_data *pdata = NULL;
+
+	pdata = snd_soc_card_get_drvdata(w->codec->card);
+	if (pdata->ext_audio_switch_supply == NULL)
+		return ret;
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		ret = regulator_enable(pdata->ext_audio_switch_supply);
+		if (ret)
+			dev_err(w->codec->card->dev,
+				"%s: Failed to enable ext audio switch supply\n",
+				__func__);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		ret = regulator_disable(pdata->ext_audio_switch_supply);
+		if (ret)
+			dev_err(w->codec->card->dev,
+				"%s: Failed to disable ext audio switch supply\n",
+				__func__);
+		break;
+	}
+	return ret;
+}
+
 static int msm8952_enable_wsa_mclk(struct snd_soc_card *card, bool enable)
 {
 	int ret = 0;
@@ -1019,6 +1146,11 @@ static int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 		 substream->name, substream->stream);
+
+	if (!q6core_is_adsp_ready()) {
+		pr_err("%s(): adsp not ready\n", __func__);
+		return -EINVAL;
+	}
 
 	/*
 	 * configure the slave select to
@@ -1110,6 +1242,11 @@ static int msm_prim_auxpcm_startup(struct snd_pcm_substream *substream)
 	pr_debug("%s(): substream = %s\n",
 			__func__, substream->name);
 
+	if (!q6core_is_adsp_ready()) {
+		pr_err("%s(): adsp not ready\n", __func__);
+		return -EINVAL;
+	}
+
 	/* mux config to route the AUX MI2S */
 	if (pdata->vaddr_gpio_mux_mic_ctl) {
 		val = ioread32(pdata->vaddr_gpio_mux_mic_ctl);
@@ -1175,6 +1312,12 @@ static int msm_sec_mi2s_snd_startup(struct snd_pcm_substream *substream)
 					__func__);
 		return 0;
 	}
+
+	if (!q6core_is_adsp_ready()) {
+		pr_err("%s(): adsp not ready\n", __func__);
+		return -EINVAL;
+	}
+
 	if ((pdata->ext_pa & SEC_MI2S_ID) == SEC_MI2S_ID) {
 		if (pdata->vaddr_gpio_mux_spkr_ctl) {
 			val = ioread32(pdata->vaddr_gpio_mux_spkr_ctl);
@@ -1247,6 +1390,12 @@ static int msm_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	int ret = 0, val = 0;
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 				substream->name, substream->stream);
+
+	if (!q6core_is_adsp_ready()) {
+		pr_err("%s(): adsp not ready\n", __func__);
+		return -EINVAL;
+	}
+
 	if ((pdata->ext_pa & QUAT_MI2S_ID) == QUAT_MI2S_ID) {
 		if (pdata->vaddr_gpio_mux_mic_ctl) {
 			val = ioread32(pdata->vaddr_gpio_mux_mic_ctl);
@@ -1314,6 +1463,12 @@ static int msm_quin_mi2s_snd_startup(struct snd_pcm_substream *substream)
 
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 				substream->name, substream->stream);
+
+	if (!q6core_is_adsp_ready()) {
+		pr_err("%s(): adsp not ready\n", __func__);
+		return -EINVAL;
+	}
+
 	if (pdata->vaddr_gpio_mux_quin_ctl) {
 		val = ioread32(pdata->vaddr_gpio_mux_quin_ctl);
 		val = val | 0x00000001;
@@ -2514,7 +2669,7 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 		return -ENODEV;
 	}
 
-	pdata->wsa_switch_supply.supply = regulator_get(dev,
+	pdata->wsa_switch_supply.supply = devm_regulator_get(dev,
 			switch_supply_str);
 	if (IS_ERR(pdata->wsa_switch_supply.supply)) {
 		ret = PTR_ERR(pdata->wsa_switch_supply.supply);
@@ -2537,7 +2692,6 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 	if (ret) {
 		dev_err(dev, "Setting voltage failed for regulator %s err = %d\n",
 			switch_supply_str, ret);
-		regulator_put(pdata->wsa_switch_supply.supply);
 		pdata->wsa_switch_supply.supply = NULL;
 		return ret;
 	}
@@ -2556,7 +2710,6 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 	if (ret < 0) {
 		dev_err(dev, "Setting current failed for regulator %s err = %d\n",
 			switch_supply_str, ret);
-		regulator_put(pdata->wsa_switch_supply.supply);
 		pdata->wsa_switch_supply.supply = NULL;
 		return ret;
 	}
@@ -2795,6 +2948,11 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 	if (ret < 0)
 		pr_debug("%s:  doesn't support external speaker pa\n",
 				__func__);
+
+	ret = ext_audio_switch_support(pdev, pdata);
+	if (ret < 0)
+		dev_dbg(&pdev->dev, "%s: doesn't require ext audio switch support\n",
+			 __func__);
 
 	ret = of_property_read_string(pdev->dev.of_node,
 		hs_micbias_type, &type);

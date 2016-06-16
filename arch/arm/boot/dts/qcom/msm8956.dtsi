@@ -23,7 +23,7 @@
 	interrupt-parent = <&intc>;
 
 	chosen {
-		bootargs = "sched_enable_hmp=1 sched_enable_power_aware=1";
+		bootargs = "sched_enable_hmp=1";
 	};
 
 	aliases {
@@ -50,6 +50,7 @@
 	aliases {
 		sdhc1 = &sdhc_1; /* SDC1 eMMC slot */
 		sdhc2 = &sdhc_2; /* SDC2 SD card slot */
+		sdhc3 = &sdhc_3; /* SDC3 SDIO card slot */
 		spi0 = &spi_0;
 	};
 
@@ -118,12 +119,12 @@
 			label = "adsp_mem";
 		};
 
-	tzapp_mem: tzapp_region@0 {
-		linux,reserve-contiguous-region;
-		linux,reserve-region;
-		linux,remove-completely;
-		reg = <0 0x8DD00000 0 0x1900000>;
-		label = "tzapp_mem";
+		tzapp_mem: tzapp_region@0 {
+			linux,reserve-contiguous-region;
+			linux,reserve-region;
+			linux,remove-completely;
+			reg = <0 0x8DD00000 0 0x1900000>;
+			label = "tzapp_mem";
 		};
 	};
 };
@@ -926,6 +927,8 @@
 		qcom,bus-width = <8>;
 
 		qcom,cpu-dma-latency-us = <60 340 900>;
+		qcom,cpu-affinity = "affine_cores";
+		qcom,cpu-affinity-mask = <0x0f>;
 
 		qcom,msm-bus,name = "sdhc1";
 		qcom,msm-bus,num-cases = <9>;
@@ -989,6 +992,61 @@
 
 		qcom,clk-rates = <400000 25000000 50000000 100000000 200000000>;
 
+		status = "disabled";
+	};
+
+	sdhc_3: sdhci@7a24900 {
+		compatible = "qcom,sdhci-msm";
+		reg = <0x7a24900 0x11c>, <0x7a24000 0x800>;
+		reg-names = "hc_mem", "core_mem";
+
+		qcom,bus-width = <4>;
+		gpios = <&msm_gpio 44 0>, /* CLK */
+			<&msm_gpio 43 0>, /* CMD */
+			<&msm_gpio 42 0>, /* DATA0 */
+			<&msm_gpio 41 0>, /* DATA1 */
+			<&msm_gpio 40 0>, /* DATA2 */
+			<&msm_gpio 39 0>; /* DATA3 */
+		qcom,gpio-names = "CLK", "CMD", "DAT0", "DAT1", "DAT2", "DAT3";
+
+		qcom,clk-rates = <400000 20000000 25000000 50000000 100000000
+								200000000>;
+		qcom,cpu-dma-latency-us = <60>;
+		qcom,cpu-affinity = "affine_cores";
+		qcom,cpu-affinity-mask = <0x0f>;
+
+		clock-names = "iface_clk", "core_clk";
+		clocks = <&clock_gcc clk_gcc_sdcc3_ahb_clk>,
+			<&clock_gcc clk_gcc_sdcc3_apps_clk>;
+
+		qcom,core_3_0v_support;
+		qcom,nonremovable;
+		qcom,msm-bus,name = "sdhc3";
+		qcom,msm-bus,num-cases = <8>;
+		qcom,msm-bus,num-paths = <1>;
+		qcom,msm-bus,vectors-KBps = <79 512 0 0>, /* No vote */
+			<79 512 1600 3200>,    /* 400 KB/s*/
+			<79 512 80000 160000>, /* 20 MB/s */
+			<79 512 100000 200000>, /* 25 MB/s */
+			<79 512 200000 400000>, /* 50 MB/s */
+			<79 512 400000 800000>, /* 100 MB/s */
+			<79 512 800000 800000>, /* 200 MB/s */
+			<79 512 2048000 4096000>; /* Max. bandwidth */
+		qcom,bus-bw-vectors-bps = <0 400000 20000000 25000000 50000000
+						100000000 200000000 4294967295>;
+
+		#address-cells = <0>;
+		interrupt-parent = <&sdhc_3>;
+		interrupts = <0 1 2>;
+		#interrupt-cells = <1>;
+		interrupt-map-mask = <0xffffffff>;
+		interrupt-map = <0 &intc 0 295 0
+			1 &intc 0 297 0
+			2 &msm_gpio 45 0x4>;
+		interrupt-names = "hc_irq", "pwr_irq", "sdiowakeup_irq";
+
+		qcom,bus-speed-mode = "SDR12", "SDR25", "SDR50", "DDR50",
+						"SDR104";
 		status = "disabled";
 	};
 
@@ -1765,13 +1823,13 @@
 		qcom,sw-power-collapse;
 		qcom,reset-clock-control;
 		qcom,regulator-scaling;
-		qcom,max-hw-load = <979200>; /* 3840 x 2176 @ 30 fps */
+		qcom,max-hw-load = <1011840>; /* 3840 x 2176 @ 30 fps + 3840 x 2176 @ 1 fps */
 		qcom,dcvs-min-load = <734400>; /* 1920 x 1088 @ 90fps */
 		qcom,dcvs-min-mbperframe = <32400>; /* 3840 x 2160 */
 
 		qcom,load-freq-tbl =
-			<979200 400000000 0xffffffff>, /* NOM+ , UHD30D   */
 			<979200 466000000 0x55555555>, /* TURBO, UHD30E   */
+			<979200 400000000 0xffffffff>, /* NOM+ , UHD30D   */
 			<734400 360000000 0xffffffff>, /* NOM  , 1080p90D */
 			<734400 400000000 0x55555555>, /* NOM+ , 1080p90E */
 			<489600 228570000 0xffffffff>, /* SVS  , 1080p60D */
@@ -2114,6 +2172,8 @@
 		qcom,proxy-clock-names = "xo";
 		qcom,active-clock-names = "iface_clk", "bus_clk", "mem_clk";
 
+		qcom,pas-id = <5>;
+		qcom,pil-mss-memsetup;
 		qcom,firmware-name = "modem";
 		qcom,pil-self-auth;
 		qcom,sysmon-id = <0>;
@@ -2132,6 +2192,12 @@
 		linux,contiguous-region = <&modem_mem>;
 	};
 
+	cpu-pmu {
+		compatible = "arm,armv8-pmuv3";
+		qcom,irq-is-percpu;
+		interrupts = <1 7 0xff00>;
+	};
+
 	ext_codec: sound-9335 {
 		compatible = "qcom,msm8952-audio-slim-codec";
 		qcom,model = "msm8976-tasha-snd-card";
@@ -2139,41 +2205,19 @@
 		reg = <0xc051000 0x4>,
 		    <0xc051004 0x4>,
 		    <0xc055000 0x4>,
+		    <0xc056000 0x4>,
 		    <0xc052000 0x4>;
 
 		reg-names = "csr_gp_io_mux_mic_ctl",
 			"csr_gp_io_mux_spkr_ctl",
 			"csr_gp_io_lpaif_pri_pcm_pri_mode_muxsel",
+			"csr_gp_io_lpaif_sec_pcm_sec_mode_muxsel",
 			"csr_gp_io_mux_quin_ctl";
 
 		qcom,audio-routing =
 			"AIF4 VI", "MCLK",
 			"RX_BIAS", "MCLK",
 			"MADINPUT", "MCLK",
-			/*"AMIC2", "MIC BIAS2",
-			"MIC BIAS2", "Headset Mic",
-			"AMIC3", "MIC BIAS2",
-			"MIC BIAS2", "ANCRight Headset Mic",
-			"AMIC4", "MIC BIAS2",
-			"MIC BIAS2", "ANCLeft Headset Mic",
-			"AMIC5", "MIC BIAS3",
-			"MIC BIAS3", "Handset Mic",
-			"AMIC6", "MIC BIAS4",
-			"MIC BIAS4", "Analog Mic6",
-			"DMIC0", "MIC BIAS1",
-			"MIC BIAS1", "Digital Mic0",
-			"DMIC1", "MIC BIAS1",
-			"MIC BIAS1", "Digital Mic1",
-			"DMIC2", "MIC BIAS3",
-			"MIC BIAS3", "Digital Mic2",
-			"DMIC3", "MIC BIAS3",
-			"MIC BIAS3", "Digital Mic3",
-			"DMIC4", "MIC BIAS4",
-			"MIC BIAS4", "Digital Mic4",
-			"DMIC5", "MIC BIAS4",
-			"MIC BIAS4", "Digital Mic5",
-			"SpkrLeft IN", "SPK1 OUT",
-			"SpkrRight IN", "SPK2 OUT";*/
 			"AMIC1", "MIC BIAS1",
 			"MIC BIAS1", "Handset Mic",
 			"AMIC2", "MIC BIAS2",
@@ -2204,7 +2248,8 @@
 				"msm-compress-dsp", "msm-pcm-hostless", "msm-pcm-afe",
 				"msm-lsm-client", "msm-pcm-routing", "msm-cpe-lsm",
 				"msm-pcm-lpa";
-		asoc-cpu = <&dai_pri_auxpcm>, <&dai_hdmi>, <&dai_mi2s_hdmi>,
+		asoc-cpu = <&dai_pri_auxpcm>, <&dai_sec_auxpcm>, <&dai_hdmi>,
+				<&dai_mi2s_hdmi>,
 				<&dai_mi2s2>, <&dai_mi2s3>, <&dai_mi2s5>,
 				<&sb_0_rx>, <&sb_0_tx>, <&sb_1_rx>, <&sb_1_tx>,
 				<&sb_2_rx>, <&sb_2_tx>, <&sb_3_rx>, <&sb_3_tx>,
@@ -2214,7 +2259,8 @@
 				<&incall_music_rx>, <&incall_music_2_rx>,
 				<&sb_5_rx>,  <&bt_sco_rx>,
 				<&bt_sco_tx>, <&int_fm_rx>, <&int_fm_tx>;
-		asoc-cpu-names = "msm-dai-q6-auxpcm.1",	"msm-dai-q6-hdmi.8",
+		asoc-cpu-names = "msm-dai-q6-auxpcm.1",	"msm-dai-q6-auxpcm.2",
+				"msm-dai-q6-hdmi.8",
 				"msm-dai-q6-mi2s-hdmi.4118",
 				"msm-dai-q6-mi2s.2",
 				"msm-dai-q6-mi2s.3", "msm-dai-q6-mi2s.5",
@@ -2232,11 +2278,6 @@
 				"msm-dai-q6-dev.12292", "msm-dai-q6-dev.12293";
 		asoc-codec = <&stub_codec>;
 		asoc-codec-names = "msm-stub-codec.1";
-		/*qcom,max-aux-codec = <2>;
-		qcom,aux-codec = "wsa881x.20170211", "wsa881x.20170212",
-				 "wsa881x.21170213", "wsa881x.21170214";
-		qcom,aux-codec-prefix = "SpkrRight", "SpkrLeft",
-					"SpkrRight", "SpkrLeft";*/
 	};
 
 	wcd9xxx_intc: wcd9xxx-irq {
@@ -2542,6 +2583,19 @@
 		qcom,msm-auxpcm-interface = "primary";
 	};
 
+	dai_sec_auxpcm: qcom,msm-pri-auxpcm {
+		compatible = "qcom,msm-auxpcm-dev";
+		qcom,msm-cpudai-auxpcm-mode = <0>, <0>;
+		qcom,msm-cpudai-auxpcm-sync = <1>, <1>;
+		qcom,msm-cpudai-auxpcm-frame = <5>, <4>;
+		qcom,msm-cpudai-auxpcm-quant = <2>, <2>;
+		qcom,msm-cpudai-auxpcm-num-slots = <1>, <1>;
+		qcom,msm-cpudai-auxpcm-slot-mapping = <1>, <1>;
+		qcom,msm-cpudai-auxpcm-data = <0>, <0>;
+		qcom,msm-cpudai-auxpcm-pcm-clk-rate = <2048000>, <2048000>;
+		qcom,msm-auxpcm-interface = "secondary";
+	};
+
 	qcom,msm-audio-ion {
 		compatible = "qcom,msm-audio-ion";
 		qcom,smmu-enabled;
@@ -2725,10 +2779,8 @@
 
 		qcom,wcd-rst-gpio-node = <&wcd_rst_gpio>;
 
-		clock-names = "wcd_pmi_clk",
-				"wcd_ap_clk";
-		clocks = <&clock_audio clk_audio_pmi_clk>,
-				<&clock_audio clk_audio_ap_clk1>;
+		clock-names = "wcd_clk";
+		clocks = <&clock_audio clk_audio_pmi_clk>;
 	};
 };
 
@@ -2754,12 +2806,12 @@
 
 &pmi8950_gpios{
 	gpio@c000{
-			status = "okay";
-			qcom,mode = <1>;		/*DIGITAL OUT*/
-			qcom,pull = <5>;		/*NO PULL*/
-			qcom,src-sel = <6>; 		/*DTEST1 OUT*/
-			qcom,master-en = <1>;		/*ENABLE GPIO*/
-			qcom,out-strength = <3>;	/*Max strength current*/
+		status = "ok";
+		qcom,mode = <1>;
+		qcom,pull = <5>;
+		qcom,src-sel = <6>;
+		qcom,master-en = <1>;
+		qcom,out-strength = <3>;
 	};
 };
 

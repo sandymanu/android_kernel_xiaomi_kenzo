@@ -69,11 +69,14 @@ struct cpe_lsm_session {
 	u16 cmd_err_code;
 	u8 id;
 	u8 num_confidence_levels;
+	u16 afe_out_port_id;
 	struct task_struct *lsm_lab_thread;
 	bool started;
 
 	u32 lab_enable;
 	struct lsm_out_fmt_cfg out_fmt_cfg;
+
+	bool is_topology_used;
 };
 
 struct wcd_cpe_afe_ops {
@@ -126,6 +129,9 @@ struct wcd_cpe_lsm_ops {
 	int (*lsm_deregister_snd_model) (void *core_handle,
 					 struct cpe_lsm_session *);
 
+	int (*lsm_get_afe_out_port_id)(void *core_handle,
+			       struct cpe_lsm_session *session);
+
 	int (*lsm_start) (void *core_handle,
 			  struct cpe_lsm_session *);
 
@@ -149,6 +155,13 @@ struct wcd_cpe_lsm_ops {
 
 	int (*lsm_set_port)(void *core_handle,
 			struct cpe_lsm_session *session);
+	int (*lsm_set_one_param)(void *core_handle,
+			struct cpe_lsm_session *session,
+			struct lsm_params_info *p_info,
+			void *data, enum LSM_PARAM_TYPE param_type);
+	void (*lsm_get_snd_model_offset)
+		(void *core_handle, struct cpe_lsm_session *,
+		 size_t *offset);
 };
 
 int wcd_cpe_get_lsm_ops(struct wcd_cpe_lsm_ops *);

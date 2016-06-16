@@ -32,6 +32,7 @@
 #include "ipa_qmi_service.h"
 #include <linux/rmnet_ipa_fd_ioctl.h>
 #include <linux/ipa.h>
+#include <uapi/linux/net_map.h>
 
 #define WWAN_METADATA_SHFT 24
 #define WWAN_METADATA_MASK 0xFF000000
@@ -41,6 +42,7 @@
 #define TAILROOM            0 /* for padding by mux layer */
 #define MAX_NUM_OF_MUX_CHANNEL  10 /* max mux channels */
 #define UL_FILTER_RULE_HANDLE_START 69
+#define DEFAULT_OUTSTANDING_HIGH_CTL 96
 #define DEFAULT_OUTSTANDING_HIGH 64
 #define DEFAULT_OUTSTANDING_LOW 32
 
@@ -52,6 +54,7 @@
 #define INVALID_MUX_ID 0xFF
 #define IPA_QUOTA_REACH_ALERT_MAX_SIZE 64
 #define IPA_QUOTA_REACH_IF_NAME_MAX_SIZE 64
+#define IPA_UEVENT_NUM_EVNP 4 /* number of event pointers */
 
 static struct net_device *ipa_netdevs[IPA_WWAN_DEVICE_COUNT];
 static struct ipa_sys_connect_params apps_to_ipa_ep_cfg, ipa_to_apps_ep_cfg;
@@ -105,6 +108,7 @@ struct wwan_private {
 	struct net_device *net;
 	struct net_device_stats stats;
 	atomic_t outstanding_pkts;
+	int outstanding_high_ctl;
 	int outstanding_high;
 	int outstanding_low;
 	uint32_t ch_id;
@@ -1007,12 +1011,46 @@ static int ipa_wwan_change_mtu(struct net_device *dev, int new_mtu)
 static int ipa_wwan_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	int ret = 0;
+	bool qmap_check;
 	struct wwan_private *wwan_ptr = netdev_priv(dev);
+	struct ipa_tx_meta meta;
 
-	if (netif_queue_stopped(dev)) {
-		IPAWANERR("[%s]fatal: ipa_wwan_xmit stopped\n", dev->name);
-	return 0;
+	if (skb->protocol != htons(ETH_P_MAP)) {
+		IPAWANDBG
+		("SW filtering out none QMAP packet received from %s",
+		current->comm);
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
 	}
+
+	qmap_check = RMNET_MAP_GET_CD_BIT(skb);
+	if (netif_queue_stopped(dev)) {
+		if (qmap_check &&
+			atomic_read(&wwan_ptr->outstanding_pkts) <
+			wwan_ptr->outstanding_high_ctl) {
+			pr_err("[%s]Queue stop, send ctrl pkts\n", dev->name);
+			goto send;
+		} else {
+			pr_err("[%s]fatal: ipa_wwan_xmit stopped\n", dev->name);
+			return NETDEV_TX_BUSY;
+		}
+	}
+
+	/* checking High WM hit */
+	if (atomic_read(&wwan_ptr->outstanding_pkts) >=
+					wwan_ptr->outstanding_high) {
+		if (!qmap_check) {
+			IPAWANDBG("pending(%d)/(%d)- stop(%d), qmap_chk(%d)\n",
+				atomic_read(&wwan_ptr->outstanding_pkts),
+				wwan_ptr->outstanding_high,
+				netif_queue_stopped(dev),
+				qmap_check);
+			netif_stop_queue(dev);
+			return NETDEV_TX_BUSY;
+		}
+	}
+
+send:
 	/* IPA_RM checking start */
 	ret = ipa_rm_inactivity_timer_request_resource(
 		IPA_RM_RESOURCE_WWAN_0_PROD);
@@ -1026,24 +1064,16 @@ static int ipa_wwan_xmit(struct sk_buff *skb, struct net_device *dev)
 		return -EFAULT;
 	}
 	/* IPA_RM checking end */
-	if (skb->protocol != htons(ETH_P_MAP)) {
-		IPAWANDBG
-		("SW filtering out none QMAP packet received from %s",
-		current->comm);
-		ret = NETDEV_TX_OK;
-		goto out;
+
+	if (qmap_check) {
+		memset(&meta, 0, sizeof(meta));
+		meta.pkt_init_dst_ep_valid = true;
+		meta.pkt_init_dst_ep_remote = true;
+		ret = ipa_tx_dp(IPA_CLIENT_Q6_LAN_CONS, skb, &meta);
+	} else {
+		ret = ipa_tx_dp(IPA_CLIENT_APPS_LAN_WAN_PROD, skb, NULL);
 	}
 
-	/* checking High WM hit */
-	if (atomic_read(&wwan_ptr->outstanding_pkts) >=
-					wwan_ptr->outstanding_high) {
-		IPAWANDBG("Outstanding high (%d)- stopping\n",
-				wwan_ptr->outstanding_high);
-		netif_stop_queue(dev);
-		ret = NETDEV_TX_BUSY;
-		goto out;
-	}
-	ret = ipa_tx_dp(IPA_CLIENT_APPS_LAN_WAN_PROD, skb, NULL);
 	if (ret) {
 		ret = NETDEV_TX_BUSY;
 		dev->stats.tx_dropped++;
@@ -1343,6 +1373,11 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 					extend_ioctl_data.u.
 					rmnet_mux_val.mux_id);
 				return rc;
+			}
+			if (rmnet_index >= MAX_NUM_OF_MUX_CHANNEL) {
+				IPAWANERR("Exceed mux_channel limit(%d)\n",
+				rmnet_index);
+				return -EFAULT;
 			}
 			IPAWANDBG("ADD_MUX_CHANNEL(%d, name: %s)\n",
 			extend_ioctl_data.u.rmnet_mux_val.mux_id,
@@ -1886,15 +1921,12 @@ static int ipa_wwan_probe(struct platform_device *pdev)
 		memset(&mux_channel[i], 0, sizeof(struct rmnet_mux_val));
 
 	/* start A7 QMI service/client */
-	if (ipa_rmnet_res.ipa_loaduC) {
+	if (ipa_rmnet_res.ipa_loaduC)
 		/* Android platform loads uC */
-		ipa_qmi_service_init(atomic_read(&is_ssr) ? false : true,
-			QMI_IPA_PLATFORM_TYPE_MSM_ANDROID_V01);
-	} else {
+		ipa_qmi_service_init(QMI_IPA_PLATFORM_TYPE_MSM_ANDROID_V01);
+	else
 		/* LE platform not loads uC */
-		ipa_qmi_service_init(atomic_read(&is_ssr) ? false : true,
-			QMI_IPA_PLATFORM_TYPE_LE_V01);
-	}
+		ipa_qmi_service_init(QMI_IPA_PLATFORM_TYPE_LE_V01);
 
 	/* construct default WAN RT tbl for IPACM */
 	ret = ipa_setup_a7_qmap_hdr();
@@ -2074,8 +2106,6 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 	ipa_del_mux_qmap_hdrs();
 	if (ipa_qmi_ctx && ipa_qmi_ctx->modem_cfg_emb_pipe_flt == false)
 		wwan_del_ul_flt_rule_to_ipa();
-	/* clean up cached QMI msg/handlers */
-	ipa_qmi_service_exit();
 	ipa_cleanup_deregister_intf();
 	atomic_set(&is_initialized, 0);
 	pr_info("rmnet_ipa completed deinitialization\n");
@@ -2203,6 +2233,9 @@ static int ssr_notifier_cb(struct notifier_block *this,
 		}
 		if (SUBSYS_BEFORE_POWERUP == code) {
 			pr_info("IPA received MPSS BEFORE_POWERUP\n");
+			if (atomic_read(&is_ssr))
+				/* clean up cached QMI msg/handlers */
+				ipa_qmi_service_exit();
 			ipa_proxy_clk_vote();
 			pr_info("IPA BEFORE_POWERUP handling is complete\n");
 			return NOTIFY_DONE;
@@ -2390,6 +2423,9 @@ int rmnet_ipa_set_data_quota(struct wan_ioctl_set_data_quota *data)
 	struct ipa_set_data_usage_quota_req_msg_v01 req;
 
 	index = find_vchannel_name_index(data->interface_name);
+	IPAWANERR("iface name %s, quota %lu\n",
+			  data->interface_name,
+			  (unsigned long int) data->quota_mbytes);
 
 	if (index == MAX_NUM_OF_MUX_CHANNEL) {
 		IPAWANERR("%s is an invalid iface name\n",
@@ -2410,6 +2446,199 @@ int rmnet_ipa_set_data_quota(struct wan_ioctl_set_data_quota *data)
 	return ipa_qmi_set_data_quota(&req);
 }
 
+ /* rmnet_ipa_set_tether_client_pipe() -
+ * @data - IOCTL data
+ *
+ * This function handles WAN_IOC_SET_DATA_QUOTA.
+ * It translates the given interface name to the Modem MUX ID and
+ * sends the request of the quota to the IPA Modem driver via QMI.
+ *
+ * Return codes:
+ * 0: Success
+ * -EFAULT: Invalid interface name provided
+ * other: See ipa_qmi_set_data_quota
+ */
+int rmnet_ipa_set_tether_client_pipe(
+	struct wan_ioctl_set_tether_client_pipe *data)
+{
+	int number, i;
+
+	IPAWANDBG("client %d, UL %d, DL %d, reset %d\n",
+	data->ipa_client,
+	data->ul_src_pipe_len,
+	data->dl_dst_pipe_len,
+	data->reset_client);
+	number = data->ul_src_pipe_len;
+	for (i = 0; i < number; i++) {
+		IPAWANDBG("UL index-%d pipe %d\n", i,
+			data->ul_src_pipe_list[i]);
+		if (data->reset_client)
+			ipa_set_client(data->ul_src_pipe_list[i],
+				0, false);
+		else
+			ipa_set_client(data->ul_src_pipe_list[i],
+				data->ipa_client, true);
+	}
+	number = data->dl_dst_pipe_len;
+	for (i = 0; i < number; i++) {
+		IPAWANDBG("DL index-%d pipe %d\n", i,
+			data->dl_dst_pipe_list[i]);
+		if (data->reset_client)
+			ipa_set_client(data->dl_dst_pipe_list[i],
+				0, false);
+		else
+			ipa_set_client(data->dl_dst_pipe_list[i],
+				data->ipa_client, false);
+	}
+	return 0;
+}
+
+int rmnet_ipa_query_tethering_stats(struct wan_ioctl_query_tether_stats *data,
+	bool reset)
+{
+	struct ipa_get_data_stats_req_msg_v01 *req;
+	struct ipa_get_data_stats_resp_msg_v01 *resp;
+	int pipe_len, rc;
+
+	req = kzalloc(sizeof(struct ipa_get_data_stats_req_msg_v01),
+			GFP_KERNEL);
+	if (!req) {
+		IPAWANERR("Can't allocate memory for stats message\n");
+		return rc;
+	}
+	resp = kzalloc(sizeof(struct ipa_get_data_stats_resp_msg_v01),
+			GFP_KERNEL);
+	if (!resp) {
+		IPAWANERR("Can't allocate memory for stats message\n");
+		kfree(req);
+		return rc;
+	}
+	memset(req, 0, sizeof(struct ipa_get_data_stats_req_msg_v01));
+	memset(resp, 0, sizeof(struct ipa_get_data_stats_resp_msg_v01));
+
+	req->ipa_stats_type = QMI_IPA_STATS_TYPE_PIPE_V01;
+	if (reset) {
+		req->reset_stats_valid = true;
+		req->reset_stats = true;
+		IPAWANERR("reset the pipe stats\n");
+	} else {
+		/* print tethered-client enum */
+		IPAWANDBG("Tethered-client enum(%d)\n", data->ipa_client);
+	}
+
+	rc = ipa_qmi_get_data_stats(req, resp);
+	if (rc) {
+		IPAWANERR("can't get ipa_qmi_get_data_stats\n");
+		kfree(req);
+		kfree(resp);
+		return rc;
+	} else if (reset) {
+		kfree(req);
+		kfree(resp);
+		return 0;
+	}
+
+	if (resp->dl_dst_pipe_stats_list_valid) {
+		for (pipe_len = 0; pipe_len < resp->dl_dst_pipe_stats_list_len;
+			pipe_len++) {
+			IPAWANDBG("Check entry(%d) dl_dst_pipe(%d)\n",
+				pipe_len, resp->dl_dst_pipe_stats_list
+					[pipe_len].pipe_index);
+			IPAWANDBG("dl_p_v4(%lu)v6(%lu) dl_b_v4(%lu)v6(%lu)\n",
+				(unsigned long int) resp->
+				dl_dst_pipe_stats_list[pipe_len].
+				num_ipv4_packets,
+				(unsigned long int) resp->
+				dl_dst_pipe_stats_list[pipe_len].
+				num_ipv6_packets,
+				(unsigned long int) resp->
+				dl_dst_pipe_stats_list[pipe_len].
+				num_ipv4_bytes,
+				(unsigned long int) resp->
+				dl_dst_pipe_stats_list[pipe_len].
+				num_ipv6_bytes);
+			if (ipa_get_client_uplink(resp->
+				dl_dst_pipe_stats_list[pipe_len].
+				pipe_index) == false) {
+				if (data->ipa_client == ipa_get_client(resp->
+					dl_dst_pipe_stats_list[pipe_len].
+					pipe_index)) {
+					/* update the DL stats */
+					data->ipv4_rx_packets += resp->
+					dl_dst_pipe_stats_list[pipe_len].
+					num_ipv4_packets;
+					data->ipv6_rx_packets += resp->
+					dl_dst_pipe_stats_list[pipe_len].
+					num_ipv6_packets;
+					data->ipv4_rx_bytes += resp->
+					dl_dst_pipe_stats_list[pipe_len].
+					num_ipv4_bytes;
+					data->ipv6_rx_bytes += resp->
+					dl_dst_pipe_stats_list[pipe_len].
+					num_ipv6_bytes;
+				}
+			}
+		}
+	}
+	IPAWANDBG("v4_rx_p(%lu) v6_rx_p(%lu) v4_rx_b(%lu) v6_rx_b(%lu)\n",
+		(unsigned long int) data->ipv4_rx_packets,
+		(unsigned long int) data->ipv6_rx_packets,
+		(unsigned long int) data->ipv4_rx_bytes,
+		(unsigned long int) data->ipv6_rx_bytes);
+
+	if (resp->ul_src_pipe_stats_list_valid) {
+		for (pipe_len = 0; pipe_len < resp->ul_src_pipe_stats_list_len;
+			pipe_len++) {
+			IPAWANDBG("Check entry(%d) ul_dst_pipe(%d)\n",
+				pipe_len,
+				resp->ul_src_pipe_stats_list[pipe_len].
+				pipe_index);
+			IPAWANDBG("ul_p_v4(%lu)v6(%lu)ul_b_v4(%lu)v6(%lu)\n",
+				(unsigned long int) resp->
+				ul_src_pipe_stats_list[pipe_len].
+				num_ipv4_packets,
+				(unsigned long int) resp->
+				ul_src_pipe_stats_list[pipe_len].
+				num_ipv6_packets,
+				(unsigned long int) resp->
+				ul_src_pipe_stats_list[pipe_len].
+				num_ipv4_bytes,
+				(unsigned long int) resp->
+				ul_src_pipe_stats_list[pipe_len].
+				num_ipv6_bytes);
+			if (ipa_get_client_uplink(resp->
+				ul_src_pipe_stats_list[pipe_len].
+				pipe_index) == true) {
+				if (data->ipa_client == ipa_get_client(resp->
+				ul_src_pipe_stats_list[pipe_len].
+				pipe_index)) {
+					/* update the DL stats */
+					data->ipv4_tx_packets += resp->
+					ul_src_pipe_stats_list[pipe_len].
+					num_ipv4_packets;
+					data->ipv6_tx_packets += resp->
+					ul_src_pipe_stats_list[pipe_len].
+					num_ipv6_packets;
+					data->ipv4_tx_bytes += resp->
+					ul_src_pipe_stats_list[pipe_len].
+					num_ipv4_bytes;
+					data->ipv6_tx_bytes += resp->
+					ul_src_pipe_stats_list[pipe_len].
+					num_ipv6_bytes;
+				}
+			}
+		}
+	}
+	IPAWANDBG("tx_p_v4(%lu)v6(%lu)tx_b_v4(%lu) v6(%lu)\n",
+		(unsigned long int) data->ipv4_tx_packets,
+		(unsigned long  int) data->ipv6_tx_packets,
+		(unsigned long int) data->ipv4_tx_bytes,
+		(unsigned long int) data->ipv6_tx_bytes);
+	kfree(req);
+	kfree(resp);
+	return 0;
+}
+
 /**
  * ipa_broadcast_quota_reach_ind() - Send Netlink broadcast on Quota
  * @mux_id - The MUX ID on which the quota has been reached
@@ -2422,8 +2651,10 @@ int rmnet_ipa_set_data_quota(struct wan_ioctl_set_data_quota *data)
 void ipa_broadcast_quota_reach_ind(u32 mux_id)
 {
 	char alert_msg[IPA_QUOTA_REACH_ALERT_MAX_SIZE];
-	char iface_name[IPA_QUOTA_REACH_IF_NAME_MAX_SIZE];
-	char *envp[] = { alert_msg, iface_name, NULL };
+	char iface_name_l[IPA_QUOTA_REACH_IF_NAME_MAX_SIZE];
+	char iface_name_m[IPA_QUOTA_REACH_IF_NAME_MAX_SIZE];
+	char *envp[IPA_UEVENT_NUM_EVNP] = {
+		alert_msg, iface_name_l, iface_name_m, NULL };
 	int res;
 	int index;
 
@@ -2440,17 +2671,24 @@ void ipa_broadcast_quota_reach_ind(u32 mux_id)
 		IPAWANERR("message too long (%d)", res);
 		return;
 	}
-
-	res = snprintf(iface_name, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+	/* posting msg for L-release for CNE */
+	res = snprintf(iface_name_l, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
+		       "UPSTREAM=%s", mux_channel[index].vchannel_name);
+	if (IPA_QUOTA_REACH_IF_NAME_MAX_SIZE <= res) {
+		IPAWANERR("message too long (%d)", res);
+		return;
+	}
+	/* posting msg for M-release for CNE */
+	res = snprintf(iface_name_m, IPA_QUOTA_REACH_IF_NAME_MAX_SIZE,
 		       "INTERFACE=%s", mux_channel[index].vchannel_name);
 	if (IPA_QUOTA_REACH_IF_NAME_MAX_SIZE <= res) {
 		IPAWANERR("message too long (%d)", res);
 		return;
 	}
 
-	IPAWANDBG("putting nlmsg: <%s> <%s>\n", alert_msg, iface_name);
+	IPAWANERR("putting nlmsg: <%s> <%s> <%s>\n",
+		alert_msg, iface_name_l, iface_name_m);
 	kobject_uevent_env(&(ipa_netdevs[0]->dev.kobj), KOBJ_CHANGE, envp);
-	return;
 }
 
 /**

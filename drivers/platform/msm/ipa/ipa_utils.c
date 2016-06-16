@@ -907,6 +907,53 @@ int ipa_get_ep_mapping(enum ipa_client_type client)
 }
 EXPORT_SYMBOL(ipa_get_ep_mapping);
 
+/* ipa_set_client() - provide client mapping
+ * @client: client type
+ *
+ * Return value: none
+ */
+void ipa_set_client(int index, enum ipacm_client_enum client, bool uplink)
+{
+	if (client >= IPACM_CLIENT_MAX || client < IPACM_CLIENT_USB) {
+		IPAERR("Bad client number! client =%d\n", client);
+	} else if (index >= IPA_MAX_NUM_PIPES || index < 0) {
+		IPAERR("Bad pipe index! index =%d\n", index);
+	} else {
+		ipa_ctx->ipacm_client[index].client_enum = client;
+		ipa_ctx->ipacm_client[index].uplink = uplink;
+	}
+}
+EXPORT_SYMBOL(ipa_set_client);
+
+/**
+ * ipa_get_client() - provide client mapping
+ * @client: client type
+ *
+ * Return value: none
+ */
+enum ipacm_client_enum ipa_get_client(int pipe_idx)
+{
+	if (pipe_idx >= IPA_MAX_NUM_PIPES || pipe_idx < 0) {
+		IPAERR("Bad pipe index! pipe_idx =%d\n", pipe_idx);
+		return IPACM_CLIENT_MAX;
+	} else {
+		return ipa_ctx->ipacm_client[pipe_idx].client_enum;
+	}
+}
+EXPORT_SYMBOL(ipa_get_client);
+
+/**
+ * ipa_get_client_uplink() - provide client mapping
+ * @client: client type
+ *
+ * Return value: none
+ */
+bool ipa_get_client_uplink(int pipe_idx)
+{
+	return ipa_ctx->ipacm_client[pipe_idx].uplink;
+}
+EXPORT_SYMBOL(ipa_get_client_uplink);
+
 /**
  * ipa_get_rm_resource_from_ep() - get the IPA_RM resource which is related to
  * the supplied pipe index.
@@ -3185,6 +3232,10 @@ void _ipa_cfg_ep_aggr_v2_0(u32 pipe_number,
 	IPA_SETFIELD_IN_REG(reg_val, ep_aggr->aggr_pkt_limit,
 			IPA_ENDP_INIT_AGGR_n_AGGR_PKT_LIMIT_SHFT,
 			IPA_ENDP_INIT_AGGR_n_AGGR_PKT_LIMIT_BMSK);
+
+	IPA_SETFIELD_IN_REG(reg_val, ep_aggr->aggr_sw_eof_active,
+			IPA_ENDP_INIT_AGGR_n_AGGR_SW_EOF_ACTIVE_SHFT,
+			IPA_ENDP_INIT_AGGR_n_AGGR_SW_EOF_ACTIVE_BMSK);
 
 	ipa_write_reg(ipa_ctx->mmio,
 			IPA_ENDP_INIT_AGGR_N_OFST_v2_0(pipe_number), reg_val);

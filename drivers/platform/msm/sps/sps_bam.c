@@ -1497,10 +1497,11 @@ int sps_bam_pipe_transfer_one(struct sps_bam *dev,
 					       next_write);
 	}
 
-	SPS_DBG(dev,
-		"sps:%s: BAM phy addr:%pa; pipe %d; write pointer to tell HW: 0x%x; write pointer read from HW: 0x%x\n",
-		__func__, BAM_ID(dev), pipe_index, next_write,
-		bam_pipe_get_desc_write_offset(&dev->base, pipe_index));
+	if (dev->ipc_loglevel == 0)
+		SPS_DBG(dev,
+			"sps:%s: BAM phy addr:%pa; pipe %d; write pointer to tell HW: 0x%x; write pointer read from HW: 0x%x\n",
+			__func__, BAM_ID(dev), pipe_index, next_write,
+			bam_pipe_get_desc_write_offset(&dev->base, pipe_index));
 
 	return 0;
 }
@@ -1789,11 +1790,12 @@ static void pipe_handler_eot(struct sps_bam *dev, struct sps_pipe *pipe)
 	/* Get offset of last descriptor completed by the pipe */
 	end_offset = bam_pipe_get_desc_read_offset(&dev->base, pipe_index);
 
-	SPS_DBG(dev,
-		"sps:%s; pipe index:%d; read pointer:0x%x; write pointer:0x%x; sys.acked_offset:0x%x.\n",
-		__func__, pipe->pipe_index, end_offset,
-		bam_pipe_get_desc_write_offset(&dev->base, pipe_index),
-		pipe->sys.acked_offset);
+	if (dev->ipc_loglevel == 0)
+		SPS_DBG(dev,
+			"sps:%s; pipe index:%d; read pointer:0x%x; write pointer:0x%x; sys.acked_offset:0x%x.\n",
+			__func__, pipe->pipe_index, end_offset,
+			bam_pipe_get_desc_write_offset(&dev->base, pipe_index),
+			pipe->sys.acked_offset);
 
 	if (producer && pipe->late_eot) {
 		struct sps_iovec *desc_end;
@@ -2197,10 +2199,37 @@ int sps_bam_pipe_is_empty(struct sps_bam *dev, u32 pipe_index,
 
 
 	/* Determine descriptor FIFO state */
-	if (end_offset == acked_offset)
+	if (end_offset == acked_offset) {
 		*empty = true;
-	else
-		*empty = false;
+	} else {
+		if ((pipe->state & BAM_STATE_BAM2BAM) == 0) {
+			*empty = false;
+			return 0;
+		}
+		if (bam_pipe_check_zlt(&dev->base, pipe_index)) {
+			bool p_idc;
+			u32 next_write;
+
+			p_idc = bam_pipe_check_pipe_empty(&dev->base,
+								pipe_index);
+
+			next_write = acked_offset + sizeof(struct sps_iovec);
+			if (next_write >= pipe->desc_size)
+				next_write = 0;
+
+			if (next_write == end_offset) {
+				*empty = true;
+				if (!p_idc)
+					SPS_DBG3(dev,
+						"sps:BAM %pa pipe %d pipe empty checking for ZLT.\n",
+						BAM_ID(dev), pipe_index);
+			} else {
+				*empty = false;
+			}
+		} else {
+			*empty = false;
+		}
+	}
 
 	return 0;
 }

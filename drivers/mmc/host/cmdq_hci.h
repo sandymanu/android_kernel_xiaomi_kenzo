@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -194,7 +194,7 @@ struct cmdq_host {
 };
 
 struct cmdq_host_ops {
-	void (*set_tranfer_params)(struct mmc_host *mmc);
+	void (*set_transfer_params)(struct mmc_host *mmc);
 	void (*set_data_timeout)(struct mmc_host *mmc, u32 val);
 	void (*clear_set_irqs)(struct mmc_host *mmc, bool clear);
 	void (*set_block_size)(struct mmc_host *mmc);
@@ -202,6 +202,7 @@ struct cmdq_host_ops {
 	void (*write_l)(struct cmdq_host *host, u32 val, int reg);
 	u32 (*read_l)(struct cmdq_host *host, int reg);
 	void (*clear_set_dumpregs)(struct mmc_host *mmc, bool set);
+	void (*enhanced_strobe_mask)(struct mmc_host *mmc, bool set);
 	int (*reset)(struct mmc_host *mmc);
 	int (*crypto_cfg)(struct mmc_host *mmc, struct mmc_request *mrq,
 				u32 slot);

@@ -296,7 +296,7 @@
 
 				interrupt-names =	"power-ok",
 							"temp-shutdown",
-							"safety-timeout",
+							"wdog-timeout",
 							"flash-fail",
 							"otst2",
 							"otst3";
@@ -443,6 +443,7 @@
 			compatible = "qcom,qpnp-labibb-regulator";
 			#address-cells = <1>;
 			#size-cells = <1>;
+			qcom,pmic-revid = <&pmi8994_revid>;
 
 			lab_regulator: qcom,lab@de00 {
 				reg = <0xde00 0x100>;

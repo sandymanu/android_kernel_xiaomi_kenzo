@@ -48,6 +48,7 @@
 		focaltech,fw-delay-era-flsh-ms = <2000>;
 		focaltech,fw-auto-cal;
 		focaltech,ignore-id-check;
+		focaltech,resume-in-workqueue;
 	};
 
 	synaptics@20 {
@@ -118,7 +119,7 @@
 		qcom,msm-mbhc-hphl-swh = <1>;
 		qcom,max-aux-codec = <1>;
 		qcom,aux-codec = "wsa881x.20170211";
-		qcom,aux-codec-prefix = "SpkrRight";
+		qcom,aux-codec-prefix = "SpkrLeft";
 	};
 };
 

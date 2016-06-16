@@ -2,7 +2,7 @@
  * drivers/mmc/host/sdhci-msm.c - Qualcomm MSM SDHCI Platform
  * driver source file
  *
- * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2016 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -151,10 +151,12 @@ enum sdc_mpm_pin_state {
 
 #define CORE_DDR_200_CFG		0x184
 #define CORE_CDC_T4_DLY_SEL		(1 << 0)
+#define CORE_CMDIN_RCLK_EN		(1 << 1)
 #define CORE_START_CDC_TRAFFIC		(1 << 6)
 
 #define CORE_VENDOR_SPEC3	0x1B0
 #define CORE_PWRSAVE_DLL	(1 << 3)
+#define CORE_CMDEN_HS400_INPUT_MASK_CNT (1 << 13)
 
 #define CORE_DLL_CONFIG_2	0x1B4
 #define CORE_DDR_CAL_EN		(1 << 0)
@@ -800,6 +802,8 @@ out:
 
 static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 {
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 	u32 dll_status, ddr_config;
 	int ret = 0;
 
@@ -812,6 +816,11 @@ static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 	ddr_config = DDR_CONFIG_POR_VAL & ~DDR_CONFIG_PRG_RCLK_DLY_MASK;
 	ddr_config |= DDR_CONFIG_PRG_RCLK_DLY;
 	writel_relaxed(ddr_config, host->ioaddr + CORE_DDR_CONFIG);
+
+	if (msm_host->enhanced_strobe && mmc_card_strobe(msm_host->mmc->card))
+		writel_relaxed((readl_relaxed(host->ioaddr + CORE_DDR_200_CFG)
+				| CORE_CMDIN_RCLK_EN),
+				host->ioaddr + CORE_DDR_200_CFG);
 
 	/* Write 1 to DDR_CAL_EN field in CORE_DLL_CONFIG_2 */
 	writel_relaxed((readl_relaxed(host->ioaddr + CORE_DLL_CONFIG_2)
@@ -834,6 +843,42 @@ static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 			host->ioaddr + CORE_VENDOR_SPEC3);
 	mb();
 out:
+	pr_debug("%s: Exit %s, ret:%d\n", mmc_hostname(host->mmc),
+			__func__, ret);
+	return ret;
+}
+
+static int sdhci_msm_enhanced_strobe(struct sdhci_host *host)
+{
+	int ret = 0;
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	struct mmc_host *mmc = host->mmc;
+
+	pr_debug("%s: Enter %s\n", mmc_hostname(host->mmc), __func__);
+
+	if (!msm_host->enhanced_strobe || !mmc_card_strobe(mmc->card)) {
+		pr_debug("%s: host/card does not support hs400 enhanced strobe\n",
+				mmc_hostname(mmc));
+		return -EINVAL;
+	}
+
+	if (msm_host->calibration_done ||
+		!(mmc->ios.timing == MMC_TIMING_MMC_HS400)) {
+		return 0;
+	}
+
+	/*
+	 * Reset the tuning block.
+	 */
+	ret = msm_init_cm_dll(host);
+	if (ret)
+		goto out;
+
+	ret = sdhci_msm_cm_dll_sdc4_calibration(host);
+out:
+	if (!ret)
+		msm_host->calibration_done = true;
 	pr_debug("%s: Exit %s, ret:%d\n", mmc_hostname(host->mmc),
 			__func__, ret);
 	return ret;
@@ -933,6 +978,13 @@ int sdhci_msm_execute_tuning(struct sdhci_host *host, u32 opcode)
 		(ios.timing == MMC_TIMING_UHS_SDR104)))
 		return 0;
 
+	/*
+	 * Don't allow re-tuning for CRC errors observed for any commands
+	 * that are sent during tuning sequence itself.
+	 */
+	if (msm_host->tuning_in_progress)
+		return 0;
+	msm_host->tuning_in_progress = true;
 	pr_debug("%s: Enter %s\n", mmc_hostname(mmc), __func__);
 
 	/* CDC/SDC4 DLL HW calibration is only required for HS400 mode*/
@@ -1108,6 +1160,7 @@ out:
 	if (!rc)
 		msm_host->tuning_done = true;
 	spin_unlock_irqrestore(&host->lock, flags);
+	msm_host->tuning_in_progress = false;
 	pr_debug("%s: Exit %s, err(%d)\n", mmc_hostname(mmc), __func__, rc);
 	return rc;
 }
@@ -1746,6 +1799,9 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 
 	if (of_property_read_bool(np, "qcom,wakeup-on-idle"))
 		host->mmc->wakeup_on_idle = true;
+
+	if (of_get_property(np, "qcom,core_3_0v_support", NULL))
+		pdata->core_3_0v_support = true;
 
 	return pdata;
 out:
@@ -2877,7 +2933,10 @@ static void sdhci_msm_set_clock(struct sdhci_host *host, unsigned int clock)
 		 * Select HS400 mode using the HC_SELECT_IN from VENDOR SPEC
 		 * register
 		 */
-		if (msm_host->tuning_done && !msm_host->calibration_done) {
+		if ((msm_host->tuning_done ||
+				(mmc_card_strobe(msm_host->mmc->card) &&
+				 msm_host->enhanced_strobe)) &&
+				!msm_host->calibration_done) {
 			/*
 			 * Write 0x6 to HC_SELECT_IN and 1 to HC_SELECT_IN_EN
 			 * field in VENDOR_SPEC_FUNC
@@ -3213,8 +3272,41 @@ static void sdhci_msm_notify_pm_status(struct sdhci_host *host,
 		 * We assume that mmc_host layer will remove
 		 * the msm_bus vote once clk gets gated.
 		 */
+	} else if (state == DEV_ERROR) {
+		if (msm_host->msm_bus_vote.client_handle)
+			sdhci_msm_bus_cancel_work_and_set_vote(host, 0);
 	}
 	msm_host->mmc_dev_state = state;
+}
+
+/*
+ * sdhci_msm_enhanced_strobe_mask :-
+ * Before running CMDQ transfers in HS400 Enhanced Strobe mode,
+ * SW should write 3 to
+ * HC_VENDOR_SPECIFIC_FUNC3.CMDEN_HS400_INPUT_MASK_CNT register.
+ * The default reset value of this register is 2.
+ */
+static void sdhci_msm_enhanced_strobe_mask(struct sdhci_host *host, bool set)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	if (!msm_host->enhanced_strobe ||
+			!mmc_card_strobe(msm_host->mmc->card)) {
+		pr_debug("%s: host/card does not support hs400 enhanced strobe\n",
+				mmc_hostname(host->mmc));
+		return;
+	}
+
+	if (set) {
+		writel_relaxed((readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC3)
+				| CORE_CMDEN_HS400_INPUT_MASK_CNT),
+				host->ioaddr + CORE_VENDOR_SPEC3);
+	} else {
+		writel_relaxed((readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC3)
+				& ~CORE_CMDEN_HS400_INPUT_MASK_CNT),
+				host->ioaddr + CORE_VENDOR_SPEC3);
+	}
 }
 
 static void sdhci_msm_clear_set_dumpregs(struct sdhci_host *host, bool set)
@@ -3267,6 +3359,7 @@ static struct sdhci_ops sdhci_msm_ops = {
 	.set_uhs_signaling = sdhci_msm_set_uhs_signaling,
 	.check_power_status = sdhci_msm_check_power_status,
 	.execute_tuning = sdhci_msm_execute_tuning,
+	.enhanced_strobe = sdhci_msm_enhanced_strobe,
 	.toggle_cdr = sdhci_msm_toggle_cdr,
 	.get_max_segments = sdhci_msm_max_segs,
 	.set_clock = sdhci_msm_set_clock,
@@ -3280,6 +3373,7 @@ static struct sdhci_ops sdhci_msm_ops = {
 	.clear_set_dumpregs = sdhci_msm_clear_set_dumpregs,
 	.notify_load = sdhci_msm_notify_load,
 	.notify_pm_status = sdhci_msm_notify_pm_status,
+	.enhanced_strobe_mask = sdhci_msm_enhanced_strobe_mask,
 };
 
 static int sdhci_msm_cfg_mpm_pin_wakeup(struct sdhci_host *host, unsigned mode)
@@ -3368,12 +3462,23 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 	if ((major == 1) && (minor < 0x34))
 		msm_host->use_cdclp533 = true;
 
+	/* Fake 3.0V support for SDIO devices which requires such voltage */
+	if (msm_host->pdata->core_3_0v_support) {
+		caps |= CORE_3_0V_SUPPORT;
+		writel_relaxed(
+			(readl_relaxed(host->ioaddr + SDHCI_CAPABILITIES) |
+			caps), host->ioaddr + CORE_VENDOR_SPEC_CAPABILITIES0);
+	}
+
 	/*
 	 * SDCC 5 controller with major version 1, minor version 0x42 and later
 	 * will require additional steps when resetting DLL.
+	 * It also supports HS400 enhanced strobe mode.
 	 */
-	if ((major == 1) && (minor >= 0x42))
+	if ((major == 1) && (minor >= 0x42)) {
 		msm_host->use_updated_dll_reset = true;
+		msm_host->enhanced_strobe = true;
+	}
 
 	/*
 	 * Mask 64-bit support for controller with 32-bit address bus so that
@@ -3676,6 +3781,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	host->quirks2 |= SDHCI_QUIRK2_BROKEN_PRESET_VALUE;
 	host->quirks2 |= SDHCI_QUIRK2_USE_RESERVED_MAX_TIMEOUT;
 	host->quirks2 |= SDHCI_QUIRK2_BROKEN_LED_CONTROL;
+	host->quirks2 |= SDHCI_QUIRK2_NON_STANDARD_TUNING;
+	host->quirks2 |= SDHCI_QUIRK2_USE_PIO_FOR_EMMC_TUNING;
 
 	if (host->quirks2 & SDHCI_QUIRK2_ALWAYS_USE_BASE_CLOCK)
 		host->quirks2 |= SDHCI_QUIRK2_DIVIDE_TOUT_BY_4;
@@ -3742,7 +3849,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= (MMC_CAP2_BOOTPART_NOACC |
 				MMC_CAP2_DETECT_ON_ERR);
 	msm_host->mmc->caps2 |= MMC_CAP2_CACHE_CTRL;
-	msm_host->mmc->caps2 |= MMC_CAP2_POWEROFF_NOTIFY;
 	msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
 	msm_host->mmc->caps2 |= MMC_CAP2_STOP_REQUEST;
 	msm_host->mmc->caps2 |= MMC_CAP2_ASYNC_SDIO_IRQ_4BIT_MODE;
@@ -3812,7 +3918,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		msm_host->is_sdiowakeup_enabled = true;
 		ret = request_irq(msm_host->pdata->sdiowakeup_irq,
 				  sdhci_msm_sdiowakeup_irq,
-				  IRQF_SHARED | IRQF_TRIGGER_LOW,
+				  IRQF_SHARED | IRQF_TRIGGER_HIGH,
 				  "sdhci-msm sdiowakeup", host);
 		if (ret) {
 			dev_err(&pdev->dev, "%s: request sdiowakeup IRQ %d: failed: %d\n",

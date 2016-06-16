@@ -103,8 +103,7 @@ struct mmc_cmdq_host_ops {
 	int (*enable)(struct mmc_host *host);
 	void (*disable)(struct mmc_host *host, bool soft);
 	int (*request)(struct mmc_host *host, struct mmc_request *mrq);
-	void (*post_req)(struct mmc_host *host, struct mmc_request *mrq,
-			 int err);
+	void (*post_req)(struct mmc_host *host, int tag, int err);
 	int (*halt)(struct mmc_host *host, bool halt);
 	void (*reset)(struct mmc_host *host, bool soft);
 	void (*dumpstate)(struct mmc_host *host);
@@ -166,6 +165,7 @@ struct mmc_host_ops {
 
 	/* The tuning command opcode value is different for SD and eMMC cards */
 	int	(*execute_tuning)(struct mmc_host *host, u32 opcode);
+	int	(*enhanced_strobe)(struct mmc_host *host);
 	int	(*select_drive_strength)(unsigned int max_dtr, int host_drv, int card_drv);
 	void	(*hw_reset)(struct mmc_host *host);
 	void	(*card_event)(struct mmc_host *host);
@@ -258,6 +258,8 @@ struct mmc_cmdq_context_info {
 #define	CMDQ_STATE_DCMD_ACTIVE 1
 #define	CMDQ_STATE_HALT 2
 #define	CMDQ_STATE_RPM_ACTIVE 3
+#define	CMDQ_STATE_CQ_DISABLE 4
+#define	CMDQ_STATE_REQ_TIMED_OUT 5
 	/* no free tag available */
 	unsigned long	req_starved;
 	wait_queue_head_t	queue_empty_wq;
@@ -362,7 +364,7 @@ struct mmc_host {
 
 #define MMC_CAP2_BOOTPART_NOACC	(1 << 0)	/* Boot partition no access */
 #define MMC_CAP2_CACHE_CTRL	(1 << 1)	/* Allow cache control */
-#define MMC_CAP2_POWEROFF_NOTIFY (1 << 2)	/* Notify poweroff supported */
+#define MMC_CAP2_FULL_PWR_CYCLE	(1 << 2)	/* Can do full power cycle */
 #define MMC_CAP2_NO_MULTI_READ	(1 << 3)	/* Multiblock reads don't work */
 #define MMC_CAP2_NO_SLEEP_CMD	(1 << 4)	/* Don't allow sleep command */
 #define MMC_CAP2_HS200_1_8V_SDR	(1 << 5)        /* can support */
@@ -529,6 +531,8 @@ struct mmc_host {
 	bool			card_clock_off;
 	bool			wakeup_on_idle;
 	struct mmc_cmdq_context_info	cmdq_ctx;
+	int num_cq_slots;
+	int dcmd_cq_slot;
 	/*
 	 * several cmdq supporting host controllers are extensions
 	 * of legacy controllers. This variable can be used to store
@@ -591,8 +595,6 @@ int mmc_power_restore_host(struct mmc_host *host);
 
 void mmc_detect_change(struct mmc_host *, unsigned long delay);
 void mmc_request_done(struct mmc_host *, struct mmc_request *);
-
-int mmc_cache_ctrl(struct mmc_host *, u8);
 
 static inline void mmc_signal_sdio_irq(struct mmc_host *host)
 {
@@ -692,6 +694,21 @@ static inline void mmc_host_clr_halt(struct mmc_host *host)
 static inline int mmc_host_halt(struct mmc_host *host)
 {
 	return test_bit(CMDQ_STATE_HALT, &host->cmdq_ctx.curr_state);
+}
+
+static inline void mmc_host_set_cq_disable(struct mmc_host *host)
+{
+	set_bit(CMDQ_STATE_CQ_DISABLE, &host->cmdq_ctx.curr_state);
+}
+
+static inline void mmc_host_clr_cq_disable(struct mmc_host *host)
+{
+	clear_bit(CMDQ_STATE_CQ_DISABLE, &host->cmdq_ctx.curr_state);
+}
+
+static inline int mmc_host_cq_disable(struct mmc_host *host)
+{
+	return test_bit(CMDQ_STATE_CQ_DISABLE, &host->cmdq_ctx.curr_state);
 }
 
 #ifdef CONFIG_MMC_CLKGATE

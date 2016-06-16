@@ -79,7 +79,6 @@
 		qcom,eeprom-name = "sunny_8865";
 		compatible = "qcom,eeprom";
 		qcom,slave-addr = <0x6c>;
-		qcom,cci-master = <0>;
 		qcom,num-blocks = <8>;
 
 		qcom,page0 = <1 0x0100 2 0x01 1 1>;
@@ -118,13 +117,15 @@
 		cam_vana-supply = <&pm8950_l22>;
 		cam_vio-supply = <&pm8950_l6>;
 		cam_vaf-supply = <&pm8950_l17>;
-		qcom,cam-vreg-name = "cam_vdig", "cam_vio", "cam_vana", "cam_vaf";
+		qcom,cam-vreg-name = "cam_vdig", "cam_vio", "cam_vana",
+							"cam_vaf";
 		qcom,cam-vreg-min-voltage = <1200000 0 2800000 2850000>;
 		qcom,cam-vreg-max-voltage = <1200000 0 2800000 2850000>;
 		qcom,cam-vreg-op-mode = <105000 0 80000 100000>;
 		qcom,gpio-no-mux = <0>;
 		pinctrl-names = "cam_default", "cam_suspend";
-		pinctrl-0 = <&cam_sensor_mclk2_default &cam_sensor_front1_default>;
+		pinctrl-0 = <&cam_sensor_mclk2_default
+			&cam_sensor_front1_default>;
 		pinctrl-1 = <&cam_sensor_mclk2_sleep &cam_sensor_front1_sleep>;
 		gpios = <&msm_gpio 28 0>,
 			<&msm_gpio 131 0>,
@@ -136,12 +137,15 @@
 		qcom,gpio-req-tbl-label = "CAMIF_MCLK2",
 					  "CAM_RESET2",
 					  "CAM_STANDBY2";
-		qcom,cam-power-seq-type = "sensor_vreg", "sensor_vreg", "sensor_vreg",
+		qcom,cam-power-seq-type = "sensor_vreg", "sensor_vreg",
+			"sensor_vreg",
 			"sensor_gpio", "sensor_gpio" , "sensor_clk";
 		qcom,cam-power-seq-val = "cam_vdig", "cam_vana", "cam_vio",
-			"sensor_gpio_reset", "sensor_gpio_standby","sensor_cam_mclk";
+			"sensor_gpio_reset", "sensor_gpio_standby",
+			"sensor_cam_mclk";
 		qcom,cam-power-seq-cfg-val = <1 1 1 1 1 24000000>;
-		qcom,cam-power-seq-delay = <1 1 1 30 30 5>;
+			qcom,cam-power-seq-delay = <1 1 1 30 30 5>;
+		qcom,cci-master = <0>;
 		status = "ok";
 		clocks = <&clock_gcc clk_mclk2_clk_src>,
 			<&clock_gcc clk_gcc_camss_mclk2_clk>;

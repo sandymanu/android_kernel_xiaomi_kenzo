@@ -32,7 +32,7 @@
 		};
 
 		cdc-reset-line {
-			qcom,pins = <&gp 133>;
+			qcom,pins = <&gp 68>;
 			qcom,num-grp-pins = <1>;
 			qcom,pin-func = <0>;
 			label = "cdc-reset-line";
@@ -41,7 +41,6 @@
 				bias-disable;
 				output-high;
 			};
-
 			cdc_reset_line_sus: cdc_reset_line_off {
 				drive-strength = <16>;
 				bias-disable;

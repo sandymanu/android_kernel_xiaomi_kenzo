@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,7 +50,7 @@
 #define TOMTOM_A_SVASS_SPE_OUTBOX(N)	(TOMTOM_A_SVASS_SPE_OUTBOX_0 + (N))
 
 #define WCD9335_CPE_SS_SPE_DRAM_OFFSET		0x48000
-#define WCD9335_CPE_SS_SPE_DRAM_SIZE		0x38000
+#define WCD9335_CPE_SS_SPE_DRAM_SIZE		0x34000
 #define WCD9335_CPE_SS_SPE_IRAM_OFFSET		0x80000
 #define WCD9335_CPE_SS_SPE_IRAM_SIZE		0x20000
 
@@ -141,6 +141,7 @@ enum cpe_command {
 	CPE_LAB_CFG_SB,
 	CPE_CMD_CANCEL_MEMACCESS,
 	CPE_CMD_PROC_INCOMING_MSG,
+	CPE_CMD_FTM_TEST,
 };
 
 enum cpe_process_result {
@@ -161,6 +162,8 @@ struct cpe_info {
 	struct list_head main_queue;
 	struct completion cmd_complete;
 	void *thread_handler;
+	bool stop_thread;
+	struct mutex msg_lock;
 	enum cpe_state state;
 	enum cpe_substate substate;
 	struct list_head client_list;
@@ -179,6 +182,11 @@ struct cpe_info {
 	u32 codec_id;
 	struct work_struct clk_plan_work;
 	struct completion core_svc_cmd_compl;
+};
+
+struct cpe_tgt_waiti_info {
+	u8 tgt_waiti_size;
+	u8 *tgt_waiti_data;
 };
 
 struct cpe_svc_tgt_abstraction {
@@ -218,6 +226,7 @@ struct cpe_svc_tgt_abstraction {
 				(bool);
 	u8 *inbox;
 	u8 *outbox;
+	struct cpe_tgt_waiti_info *tgt_waiti_info;
 };
 
 static enum cpe_svc_result cpe_tgt_tomtom_init(
@@ -276,6 +285,8 @@ struct cpe_priv {
 };
 
 static struct cpe_priv cpe_d;
+
+static enum cpe_svc_result __cpe_svc_shutdown(void *cpe_handle);
 
 static enum cpe_svc_result cpe_is_command_valid(
 		const struct cpe_info *t_info,
@@ -336,6 +347,8 @@ static bool cpe_register_read_autoinc_supported(void)
 	return true;
 }
 
+
+/* Called under msgq locked context */
 static void cpe_cmd_received(struct cpe_info *t_info)
 {
 	struct cpe_command_node *node = NULL;
@@ -381,9 +394,21 @@ static int cpe_worker_thread(void *context)
 
 	while (!kthread_should_stop()) {
 		wait_for_completion(&t_info->cmd_complete);
+
+		CPE_SVC_GRAB_LOCK(&t_info->msg_lock, "msg_lock");
 		cpe_cmd_received(t_info);
 		INIT_COMPLETION(t_info->cmd_complete);
+		if (t_info->stop_thread)
+			goto unlock_and_exit;
+		CPE_SVC_REL_LOCK(&t_info->msg_lock, "msg_lock");
 	};
+
+	pr_debug("%s: thread exited\n", __func__);
+	return 0;
+
+unlock_and_exit:
+	pr_debug("%s: thread stopped\n", __func__);
+	CPE_SVC_REL_LOCK(&t_info->msg_lock, "msg_lock");
 
 	return 0;
 }
@@ -392,14 +417,30 @@ static void cpe_create_worker_thread(struct cpe_info *t_info)
 {
 	INIT_LIST_HEAD(&t_info->main_queue);
 	init_completion(&t_info->cmd_complete);
+	t_info->stop_thread = false;
 	t_info->thread_handler = kthread_run(cpe_worker_thread,
 		(void *)t_info, "cpe-worker-thread");
+	pr_debug("%s: Created new worker thread\n",
+		 __func__);
 }
 
 static void cpe_cleanup_worker_thread(struct cpe_info *t_info)
 {
-	if (t_info->thread_handler != NULL)
-		kthread_stop(t_info->thread_handler);
+	if (!t_info->thread_handler) {
+		pr_err("%s: thread not created\n", __func__);
+		return;
+	}
+
+	/*
+	 * Wake up the command handler in case
+	 * it is waiting for an command to be processed.
+	 */
+	CPE_SVC_GRAB_LOCK(&t_info->msg_lock, "msg_lock");
+	t_info->stop_thread = true;
+	complete(&t_info->cmd_complete);
+	CPE_SVC_REL_LOCK(&t_info->msg_lock, "msg_lock");
+
+	kthread_stop(t_info->thread_handler);
 
 	t_info->thread_handler = NULL;
 }
@@ -429,14 +470,17 @@ cpe_send_cmd_to_thread(struct cpe_info *t_info,
 
 	cmd->command = command;
 	cmd->data = data;
+
+	CPE_SVC_GRAB_LOCK(&t_info->msg_lock, "msg_lock");
 	if (high_prio)
 		list_add(&(cmd->list),
 			 &(t_info->main_queue));
 	else
 		list_add_tail(&(cmd->list),
 			      &(t_info->main_queue));
-
 	complete(&t_info->cmd_complete);
+	CPE_SVC_REL_LOCK(&t_info->msg_lock, "msg_lock");
+
 	return rc;
 }
 
@@ -818,9 +862,7 @@ static void cpe_process_irq_int(u32 irq,
 	case CPE_IRQ_WDOG_BITE:
 	case CPE_IRQ_RCO_WDOG_INT:
 		err_irq = true;
-		CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
-		cpe_svc_shutdown(t_info);
-		CPE_SVC_GRAB_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
+		__cpe_svc_shutdown(t_info);
 		break;
 
 	case CPE_IRQ_FLL_LOCK_LOST:
@@ -1114,7 +1156,6 @@ static enum cpe_process_result cpe_boot_complete(
 	}
 
 	pr_debug("%s: boot complete\n", __func__);
-	cpe_create_worker_thread(t_info);
 	return CPE_SVC_SUCCESS;
 }
 
@@ -1216,17 +1257,6 @@ static enum cpe_process_result cpe_process_kill_thread(
 {
 	struct cpe_svc_notification payload;
 
-	if (t_info->pending) {
-		struct cpe_send_msg *m =
-			(struct cpe_send_msg *)t_info->pending;
-		cpe_notify_cmi_client(t_info, m->payload,
-			CPE_SVC_SHUTTING_DOWN);
-		kfree(t_info->pending);
-		t_info->pending = NULL;
-	}
-
-	cpe_command_cleanup(command_node);
-	kfree(command_node);
 	cpe_d.cpe_msg_buffer = 0;
 	payload.result = CPE_SVC_SHUTTING_DOWN;
 	payload.event = CPE_SVC_OFFLINE;
@@ -1239,7 +1269,6 @@ static enum cpe_process_result cpe_process_kill_thread(
 	cpe_change_state(t_info, CPE_STATE_OFFLINE,
 			 CPE_SS_IDLE);
 	cpe_broadcast_notification(t_info, &payload);
-	cpe_cleanup_worker_thread(t_info);
 
 	return CPE_PROC_KILLED;
 }
@@ -1312,12 +1341,12 @@ static enum cpe_process_result cpe_mt_process_cmd(
 		service = CMI_HDR_GET_SERVICE(hdr);
 		pr_debug("%s: msg send success, notifying clients\n",
 			 __func__);
+		cpe_command_cleanup(command_node);
+		t_info->pending = NULL;
 		cpe_change_state(t_info,
 				 CPE_STATE_IDLE, CPE_SS_IDLE);
 		cpe_notify_cmi_client(t_info,
 			t_info->tgt->outbox, CPE_SVC_SUCCESS);
-		cpe_command_cleanup(command_node);
-		t_info->pending = NULL;
 		break;
 
 	case CPE_CMD_PROC_INCOMING_MSG:
@@ -1374,6 +1403,7 @@ static enum cpe_svc_result cpe_mt_validate_cmd(
 		case CPE_CMD_PROCESS_IRQ:
 		case CPE_CMD_KILL_THREAD:
 		case CPE_CMD_DEINITIALIZE:
+		case CPE_CMD_FTM_TEST:
 			rc = CPE_SVC_SUCCESS;
 			break;
 		default:
@@ -1387,6 +1417,7 @@ static enum cpe_svc_result cpe_mt_validate_cmd(
 		case CPE_CMD_RESET:
 		case CPE_CMD_DL_SEGMENT:
 		case CPE_CMD_BOOT:
+		case CPE_CMD_FTM_TEST:
 			rc = CPE_SVC_SUCCESS;
 			break;
 		default:
@@ -1402,6 +1433,9 @@ static enum cpe_svc_result cpe_mt_validate_cmd(
 		case CPE_CMD_BOOT_COMPLETE:
 		case CPE_CMD_SHUTDOWN:
 			rc = CPE_SVC_SUCCESS;
+			break;
+		case CPE_CMD_FTM_TEST:
+			rc = CPE_SVC_BUSY;
 			break;
 		default:
 			rc = CPE_SVC_NOT_READY;
@@ -1421,6 +1455,9 @@ static enum cpe_svc_result cpe_mt_validate_cmd(
 		case CPE_CMD_PROC_INCOMING_MSG:
 			rc = CPE_SVC_SUCCESS;
 			break;
+		case CPE_CMD_FTM_TEST:
+			rc = CPE_SVC_BUSY;
+			break;
 		default:
 			rc = CPE_SVC_FAILED;
 			break;
@@ -1437,6 +1474,9 @@ static enum cpe_svc_result cpe_mt_validate_cmd(
 		case CPE_CMD_KILL_THREAD:
 		case CPE_CMD_PROC_INCOMING_MSG:
 			rc = CPE_SVC_SUCCESS;
+			break;
+		case CPE_CMD_FTM_TEST:
+			rc = CPE_SVC_BUSY;
 			break;
 		default:
 			rc = CPE_SVC_FAILED;
@@ -1545,6 +1585,7 @@ void *cpe_svc_initialize(
 
 	memset(t_info->tgt->outbox, 0, cap->outbox_size);
 	memset(t_info->tgt->inbox, 0, cap->inbox_size);
+	mutex_init(&t_info->msg_lock);
 	cpe_d.cpe_irq_control_callback = irq_control_callback;
 	t_info->cpe_process_command = cpe_mt_process_cmd;
 	t_info->cpe_cmd_validate = cpe_mt_validate_cmd;
@@ -1590,6 +1631,7 @@ enum cpe_svc_result cpe_svc_deinitialize(void *cpe_handle)
 	t_info->tgt->tgt_deinit(t_info->tgt);
 	cpe_change_state(t_info, CPE_STATE_UNINITIALIZED,
 			 CPE_SS_IDLE);
+	mutex_destroy(&t_info->msg_lock);
 	kfree(t_info->tgt);
 	kfree(t_info);
 	mutex_destroy(&cpe_d.cpe_api_mutex);
@@ -1738,13 +1780,13 @@ enum cpe_svc_result cpe_svc_route_notification(void *cpe_handle,
 	return rc;
 }
 
-enum cpe_svc_result cpe_svc_shutdown(void *cpe_handle)
+static enum cpe_svc_result __cpe_svc_shutdown(void *cpe_handle)
 {
 	enum cpe_svc_result rc = CPE_SVC_SUCCESS;
 	struct cpe_info *t_info = (struct cpe_info *)cpe_handle;
 	struct cpe_command_node *n = NULL;
+	struct cpe_command_node kill_cmd;
 
-	CPE_SVC_GRAB_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
 	if (!t_info)
 		t_info = cpe_d.cpe_default_handle;
 
@@ -1753,7 +1795,6 @@ enum cpe_svc_result cpe_svc_shutdown(void *cpe_handle)
 	if (rc != CPE_SVC_SUCCESS) {
 		pr_err("%s: cmd validation fail, cmd = %d\n",
 			__func__, CPE_CMD_SHUTDOWN);
-		CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
 		return rc;
 	}
 
@@ -1765,7 +1806,11 @@ enum cpe_svc_result cpe_svc_shutdown(void *cpe_handle)
 			cpe_notify_cmi_client(t_info, (u8 *)n->data,
 				CPE_SVC_SHUTTING_DOWN);
 		}
-
+		/*
+		 * Since command cannot be processed,
+		 * delete it from the list and perform cleanup
+		 */
+		list_del(&n->list);
 		cpe_command_cleanup(n);
 		kfree(n);
 	}
@@ -1775,10 +1820,31 @@ enum cpe_svc_result cpe_svc_shutdown(void *cpe_handle)
 	t_info->state = CPE_STATE_OFFLINE;
 	t_info->substate = CPE_SS_IDLE;
 
-	rc = cpe_send_cmd_to_thread(t_info, CPE_CMD_KILL_THREAD,
-				    NULL, true);
-	CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
+	memset(&kill_cmd, 0, sizeof(kill_cmd));
+	kill_cmd.command = CPE_CMD_KILL_THREAD;
 
+	if (t_info->pending) {
+		struct cpe_send_msg *m =
+			(struct cpe_send_msg *)t_info->pending;
+		cpe_notify_cmi_client(t_info, m->payload,
+			CPE_SVC_SHUTTING_DOWN);
+		kfree(t_info->pending);
+		t_info->pending = NULL;
+	}
+
+	cpe_cleanup_worker_thread(t_info);
+	t_info->cpe_process_command(&kill_cmd);
+
+	return rc;
+}
+
+enum cpe_svc_result cpe_svc_shutdown(void *cpe_handle)
+{
+	enum cpe_svc_result rc = CPE_SVC_SUCCESS;
+
+	CPE_SVC_GRAB_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
+	rc = __cpe_svc_shutdown(cpe_handle);
+	CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
 	return rc;
 }
 
@@ -1967,6 +2033,115 @@ enum cmi_api_result cmi_send_msg(void *message)
 		kfree(msg);
 	}
 
+	CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
+	return rc;
+}
+
+enum cpe_svc_result cpe_svc_ftm_test(void *cpe_handle, u32 *status)
+{
+	enum cpe_svc_result rc = CPE_SVC_SUCCESS;
+	struct cpe_info *t_info = (struct cpe_info *)cpe_handle;
+	struct cpe_svc_mem_segment backup_seg;
+	struct cpe_svc_mem_segment waiti_seg;
+	u8 *backup_data = NULL;
+
+	CPE_SVC_GRAB_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
+	if (!t_info)
+		t_info = cpe_d.cpe_default_handle;
+
+	rc = cpe_is_command_valid(t_info, CPE_CMD_FTM_TEST);
+	if (rc != CPE_SVC_SUCCESS) {
+		pr_err("%s: cmd validation fail, cmd = %d\n",
+			__func__, CPE_CMD_FTM_TEST);
+		goto fail_cmd;
+	}
+
+	if (t_info && t_info->tgt) {
+		backup_data = kzalloc(
+				t_info->tgt->tgt_waiti_info->tgt_waiti_size,
+				GFP_KERNEL);
+
+		/* CPE reset */
+		rc = t_info->tgt->tgt_reset();
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: CPE reset fail! err = %d\n",
+				__func__, rc);
+			goto err_return;
+		}
+
+		/* Back up the 4 byte IRAM data first */
+		backup_seg.type = CPE_SVC_INSTRUCTION_MEM;
+		backup_seg.cpe_addr =
+			t_info->tgt->tgt_get_cpe_info()->IRAM_offset;
+		backup_seg.size = t_info->tgt->tgt_waiti_info->tgt_waiti_size;
+		backup_seg.data = backup_data;
+
+		pr_debug("%s: Backing up IRAM data from CPE\n",
+			__func__);
+
+		rc = t_info->tgt->tgt_read_ram(t_info, &backup_seg);
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: Fail to backup CPE IRAM data, err = %d\n",
+				__func__, rc);
+			goto err_return;
+		}
+
+		pr_debug("%s: Complete backing up IRAM data from CPE\n",
+			__func__);
+
+		/* Write the WAITI instruction data */
+		waiti_seg.type = CPE_SVC_INSTRUCTION_MEM;
+		waiti_seg.cpe_addr =
+			t_info->tgt->tgt_get_cpe_info()->IRAM_offset;
+		waiti_seg.size = t_info->tgt->tgt_waiti_info->tgt_waiti_size;
+		waiti_seg.data = t_info->tgt->tgt_waiti_info->tgt_waiti_data;
+
+		rc = t_info->tgt->tgt_write_ram(t_info, &waiti_seg);
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: Fail to write the WAITI data, err = %d\n",
+				__func__, rc);
+			goto restore_iram;
+		}
+
+		/* Boot up cpe to execute the WAITI instructions */
+		rc = t_info->tgt->tgt_boot(1);
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: Fail to boot CPE, err = %d\n",
+				__func__, rc);
+			goto reset;
+		}
+
+		/*
+		 * 1ms delay is suggested by the hw team to
+		 * wait for cpe to boot up.
+		 */
+		usleep_range(1000, 1100);
+
+		/* Check if the cpe init is done after executing the WAITI */
+		*status = t_info->tgt->tgt_cpar_init_done();
+
+reset:
+		/* Set the cpe back to reset state */
+		rc = t_info->tgt->tgt_reset();
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: CPE reset fail! err = %d\n",
+				__func__, rc);
+			goto restore_iram;
+		}
+
+restore_iram:
+		/* Restore the IRAM 4 bytes data */
+		rc = t_info->tgt->tgt_write_ram(t_info, &backup_seg);
+		if (rc != CPE_SVC_SUCCESS) {
+			pr_err("%s: Fail to restore the IRAM data, err = %d\n",
+				__func__, rc);
+			goto err_return;
+		}
+	}
+
+err_return:
+	kfree(backup_data);
+fail_cmd:
 	CPE_SVC_REL_LOCK(&cpe_d.cpe_api_mutex, "cpe_api");
 	return rc;
 }
@@ -2319,6 +2494,13 @@ static enum cpe_svc_result cpe_tgt_tomtom_deinit(
 	return CPE_SVC_SUCCESS;
 }
 
+static u8 cpe_tgt_tomtom_waiti_data[] = {0x00, 0x70, 0x00, 0x00};
+
+static struct cpe_tgt_waiti_info cpe_tgt_tomtom_waiti_info = {
+	.tgt_waiti_size = ARRAY_SIZE(cpe_tgt_tomtom_waiti_data),
+	.tgt_waiti_data = cpe_tgt_tomtom_waiti_data,
+};
+
 static enum cpe_svc_result cpe_tgt_tomtom_init(
 		struct cpe_svc_codec_info_v1 *codec_info,
 		struct cpe_svc_tgt_abstraction *param)
@@ -2343,6 +2525,7 @@ static enum cpe_svc_result cpe_tgt_tomtom_init(
 		param->tgt_get_cpe_info = cpe_tgt_tomtom_get_cpe_info;
 		param->tgt_deinit = cpe_tgt_tomtom_deinit;
 		param->tgt_voice_tx_lab = cpe_tgt_tomtom_voicetx;
+		param->tgt_waiti_info = &cpe_tgt_tomtom_waiti_info;
 
 		param->inbox = kzalloc(TOMTOM_A_SVASS_SPE_INBOX_SIZE,
 				       GFP_KERNEL);
@@ -2753,6 +2936,13 @@ static enum cpe_svc_result
 	return rc;
 }
 
+static u8 cpe_tgt_wcd9335_waiti_data[] = {0x00, 0x70, 0x00, 0x00};
+
+static struct cpe_tgt_waiti_info cpe_tgt_wcd9335_waiti_info = {
+	.tgt_waiti_size = ARRAY_SIZE(cpe_tgt_wcd9335_waiti_data),
+	.tgt_waiti_data = cpe_tgt_wcd9335_waiti_data,
+};
+
 static enum cpe_svc_result cpe_tgt_wcd9335_init(
 		struct cpe_svc_codec_info_v1 *codec_info,
 		struct cpe_svc_tgt_abstraction *param)
@@ -2777,6 +2967,7 @@ static enum cpe_svc_result cpe_tgt_wcd9335_init(
 		param->tgt_get_cpe_info = cpe_tgt_wcd9335_get_cpe_info;
 		param->tgt_deinit = cpe_tgt_wcd9335_deinit;
 		param->tgt_voice_tx_lab = cpe_tgt_wcd9335_voicetx;
+		param->tgt_waiti_info = &cpe_tgt_wcd9335_waiti_info;
 
 		param->inbox = kzalloc(WCD9335_CPE_SS_SPE_INBOX_SIZE,
 				       GFP_KERNEL);
