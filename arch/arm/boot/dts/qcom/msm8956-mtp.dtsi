@@ -191,14 +191,15 @@
 
        fpc_fpc1020 {
                 compatible = "fpc,fpc1020";
-                fpc,reset_gpio = <&msm_gpio 110 0>;
-                fpc,irq_gpio = <&msm_gpio 106 0>;
+                fpc,gpio_rst = <&msm_gpio 110 0>;
+                fpc,gpio_irq = <&msm_gpio 106 0>;
                 fpc,irq_flags = <0x2001>;
                 fpc,event-type = <4>;
                 fpc,event-code = <4>;
                 vcc_spi-supply = <&pm8950_l6>;
                 vdd_ana-supply = <&pm8950_l6>;
                 vdd_io-supply = <&pm8950_l6>;
+                fpc,enable-wakeup;
         };
 };
 
