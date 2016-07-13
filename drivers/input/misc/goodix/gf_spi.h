@@ -17,7 +17,9 @@ struct gf_key {
 	int value;
 };
 
-struct gf_key_map {
+
+struct gf_key_map
+{
     char *name;
     unsigned short val;
 };
@@ -34,14 +36,12 @@ struct gf_key_map {
 #define  GF_IOC_PM_FBCABCK  _IO(GF_IOC_MAGIC, 8)
 #define  GF_IOC_POWER_ON   _IO(GF_IOC_MAGIC, 9)
 #define  GF_IOC_POWER_OFF  _IO(GF_IOC_MAGIC, 10)
-#define  GF_IOC_ENABLE_GPIO   _IO(GF_IOC_MAGIC, 11)
-#define  GF_IOC_DISABLE_GPIO  _IO(GF_IOC_MAGIC, 12)
 
-#define  GF_IOC_MAXNR    13
+#define  GF_IOC_MAXNR    11
 
-/*#define AP_CONTROL_CLK       1 */
-#define  USE_PLATFORM_BUS    1
-
+//#define AP_CONTROL_CLK       1
+#define  USE_PLATFORM_BUS     1
+//#define  USE_SPI_BUS	1
 #define GF_FASYNC   1	/*If support fasync mechanism.*/
 struct gf_dev {
 	dev_t devt;
@@ -71,7 +71,7 @@ struct gf_dev {
 	char fb_black;
 };
 
-int gf_parse_dts(struct gf_dev *gf_dev);
+int gf_parse_dts(struct gf_dev* gf_dev);
 void gf_cleanup(struct gf_dev *gf_dev);
 
 int gf_power_on(struct gf_dev *gf_dev);
