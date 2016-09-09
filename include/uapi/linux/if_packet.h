@@ -91,7 +91,7 @@ struct tpacket_auxdata {
 #define TP_STATUS_COPY			(1 << 1)
 #define TP_STATUS_LOSING		(1 << 2)
 #define TP_STATUS_CSUMNOTREADY		(1 << 3)
-#define TP_STATUS_VLAN_VALID		(1 << 4) /* auxdata has valid tp_vlan_tci */
+#define TP_STATUS_VLAN_VALID	(1 << 4) /* auxdata has valid tp_vlan_tci */
 #define TP_STATUS_BLK_TMO		(1 << 5)
 #define TP_STATUS_CSUM_UNNECESSARY	(1 << 7)
 

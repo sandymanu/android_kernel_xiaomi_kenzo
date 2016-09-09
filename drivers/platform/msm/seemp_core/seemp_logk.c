@@ -76,7 +76,6 @@ void *seemp_logk_kernel_start_record(char **buf)
 	int ret;
 
 	DEFINE_WAIT(write_wait);
-
 	ret = 0;
 	idx = 0;
 	now = current_kernel_time();
@@ -168,7 +167,6 @@ static int seemp_logk_usr_record(const char __user *buf, size_t count)
 	int idx, ret;
 
 	DEFINE_WAIT(write_wait);
-
 	if (buf) {
 		local_blk = (struct seemp_logk_blk *)buf;
 		if (copy_from_user(&usr_blk.pid, &local_blk->pid,
@@ -311,7 +309,6 @@ static long seemp_logk_ioctl(struct file *filp, unsigned int cmd,
 		mutex_unlock(&sdev->lock);
 		if (ret && block_apps)
 			wake_up_interruptible(&sdev->writers_wq);
-		return 0;
 	} else if (cmd == SEEMP_CMD_GET_RINGSZ) {
 		if (copy_to_user((unsigned int *)arg, &sdev->ring_sz,
 				sizeof(unsigned int)))
@@ -326,9 +323,11 @@ static long seemp_logk_ioctl(struct file *filp, unsigned int cmd,
 		return seemp_logk_set_mapping(arg);
 	} else if (SEEMP_CMD_CHECK_FILTER == cmd) {
 		return seemp_logk_check_filter(arg);
+	} else {
+		pr_err("Invalid Request %X\n", cmd);
+		return -ENOIOCTLCMD;
 	}
-	pr_err("Invalid Request %X\n", cmd);
-	return -ENOIOCTLCMD;
+	return 0;
 }
 
 static long seemp_logk_reserve_rdblks(
@@ -338,7 +337,6 @@ static long seemp_logk_reserve_rdblks(
 	struct read_range rrange;
 
 	DEFINE_WAIT(read_wait);
-
 	mutex_lock(&sdev->lock);
 	if (sdev->num_writers > 0 || sdev->num_read_avail_blks <= 0) {
 		ret = -EPERM;

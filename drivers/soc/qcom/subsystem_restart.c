@@ -297,7 +297,8 @@ static ssize_t firmware_name_store(struct device *dev,
 
 	pr_info("Changing subsys fw_name to %s\n", buf);
 	mutex_lock(&track->lock);
-	strlcpy(subsys->desc->fw_name, buf, count + 1);
+	strlcpy(subsys->desc->fw_name, buf,
+			 min(count + 1, sizeof(subsys->desc->fw_name)));
 	mutex_unlock(&track->lock);
 	return count;
 }
@@ -573,6 +574,7 @@ int wait_for_shutdown_ack(struct subsys_desc *desc)
 	}
 
 	pr_err("[%s]: Timed out waiting for shutdown ack\n", desc->name);
+
 	return -ETIMEDOUT;
 }
 EXPORT_SYMBOL(wait_for_shutdown_ack);

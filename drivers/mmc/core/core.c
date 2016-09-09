@@ -416,22 +416,6 @@ void mmc_blk_init_bkops_statistics(struct mmc_card *card)
 }
 EXPORT_SYMBOL(mmc_blk_init_bkops_statistics);
 
-static void mmc_update_bkops_auto_on(struct mmc_bkops_stats *stats)
-{
-	spin_lock_irq(&stats->lock);
-	if (stats->enabled)
-		stats->auto_start++;
-	spin_unlock_irq(&stats->lock);
-}
-
-static void mmc_update_bkops_auto_off(struct mmc_bkops_stats *stats)
-{
-	spin_lock_irq(&stats->lock);
-	if (stats->enabled)
-		stats->auto_stop++;
-	spin_unlock_irq(&stats->lock);
-}
-
 static void mmc_start_cmdq_request(struct mmc_host *host,
 				   struct mmc_request *mrq)
 {
@@ -494,59 +478,6 @@ void mmc_start_delayed_bkops(struct mmc_card *card)
 				   card->bkops_info.delay_ms));
 }
 EXPORT_SYMBOL(mmc_start_delayed_bkops);
-
- /**
- *	mmc_set_auto_bkops - set auto BKOPS for supported cards
- *	@card: MMC card to start BKOPS
- *	@enable: enable/disable flag
- *
- *	Configure the card to run automatic BKOPS.
- *	Should be called when host is claimed.
- */
-int mmc_set_auto_bkops(struct mmc_card *card, bool enable)
-{
-	int ret = 0;
-	u8 bkops_en;
-
-	BUG_ON(!card);
-	enable = !!enable;
-
-	if (unlikely(!mmc_card_support_auto_bkops(card))) {
-		pr_err("%s: %s: card doesn't support auto bkops\n",
-				mmc_hostname(card->host), __func__);
-		return -EPERM;
-	}
-
-	if (enable) {
-		if (mmc_card_doing_auto_bkops(card))
-			goto out;
-		bkops_en = card->ext_csd.bkops_en | EXT_CSD_BKOPS_AUTO_EN;
-	} else {
-		if (!mmc_card_doing_auto_bkops(card))
-			goto out;
-		bkops_en = card->ext_csd.bkops_en & ~EXT_CSD_BKOPS_AUTO_EN;
-	}
-
-	ret = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_BKOPS_EN,
-			bkops_en, 0);
-	if (ret) {
-		pr_err("%s: %s: error in setting auto bkops to %d (%d)\n",
-			mmc_hostname(card->host), __func__, enable, ret);
-	} else {
-		if (enable) {
-			mmc_card_set_auto_bkops(card);
-			mmc_update_bkops_auto_on(&card->bkops_info.bkops_stats);
-		} else {
-			mmc_card_clr_auto_bkops(card);
-			mmc_update_bkops_auto_off(
-					&card->bkops_info.bkops_stats);
-		}
-		card->ext_csd.bkops_en = bkops_en;
-	}
-out:
-	return ret;
-}
-EXPORT_SYMBOL(mmc_set_auto_bkops);
 
 /**
  *	mmc_start_bkops - start BKOPS for supported cards
@@ -2438,11 +2369,11 @@ static inline void mmc_bus_put(struct mmc_host *host)
 int mmc_resume_bus(struct mmc_host *host)
 {
 	unsigned long flags;
+	int err = 0;
 
 	if (!mmc_bus_needs_resume(host))
 		return -EINVAL;
 
-	printk("%s: Starting deferred resume\n", mmc_hostname(host));
 	spin_lock_irqsave(&host->lock, flags);
 	host->bus_resume_flags &= ~MMC_BUSRESUME_NEEDS_RESUME;
 	host->rescan_disable = 0;
@@ -2453,10 +2384,18 @@ int mmc_resume_bus(struct mmc_host *host)
 		mmc_power_up(host);
 		BUG_ON(!host->bus_ops->resume);
 		host->bus_ops->resume(host);
+		if (mmc_card_cmdq(host->card)) {
+			err = mmc_cmdq_halt(host, false);
+			if (err)
+				pr_err("%s: un-halt: failed: %d\n",
+				       __func__, err);
+			else
+				mmc_card_clr_suspended(host->card);
+		}
+		host->dev_status = DEV_RESUMED;
 	}
 
 	mmc_bus_put(host);
-	printk("%s: Deferred resume completed\n", mmc_hostname(host));
 	return 0;
 }
 
@@ -4024,6 +3963,15 @@ int mmc_power_restore_host(struct mmc_host *host)
 }
 EXPORT_SYMBOL(mmc_power_restore_host);
 
+int mmc_power_restore_broken_host(struct mmc_host *host)
+{
+	if (!host->bus_ops || host->bus_dead || !host->bus_ops->power_restore)
+		return -EINVAL;
+
+	return host->bus_ops->power_restore(host);
+}
+EXPORT_SYMBOL(mmc_power_restore_broken_host);
+
 int mmc_card_awake(struct mmc_host *host)
 {
 	int err = -ENOSYS;
@@ -4127,6 +4075,14 @@ int mmc_suspend_host(struct mmc_host *host)
 		if (host->ops->notify_pm_status)
 			host->ops->notify_pm_status(host, DEV_SUSPENDING);
 		/*
+		 * Disable clock scaling before suspend and enable it after
+		 * resume so as to avoid clock scaling decisions kicking in
+		 * during this window.
+		 */
+		if (mmc_can_scale_clk(host))
+			mmc_disable_clk_scaling(host);
+
+		/*
 		 * A long response time is not acceptable for device drivers
 		 * when doing suspend. Prevent mmc_claim_host in the suspend
 		 * sequence, to potentially wait "forever" by trying to
@@ -4189,6 +4145,8 @@ int mmc_suspend_host(struct mmc_host *host)
 		mmc_release_host(host);
 	}
 
+	if (err && mmc_can_scale_clk(host))
+		mmc_init_clk_scaling(host);
 	trace_mmc_suspend_host(mmc_hostname(host), err,
 			ktime_to_us(ktime_sub(ktime_get(), start)));
 	if (host->ops->notify_pm_status)
@@ -4257,6 +4215,7 @@ int mmc_resume_host(struct mmc_host *host)
 		}
 	}
 	host->pm_flags &= ~MMC_PM_KEEP_POWER;
+	host->pm_flags &= ~MMC_PM_WAKE_SDIO_IRQ;
 	mmc_bus_put(host);
 
 	trace_mmc_resume_host(mmc_hostname(host), err,

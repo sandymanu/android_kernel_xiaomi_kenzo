@@ -896,9 +896,9 @@ static enum handoff mux_div_clk_handoff(struct clk *c)
 	}
 
 	if (md->en_mask && md->ops && md->ops->is_enabled)
-			return md->ops->is_enabled(md)
-				? HANDOFF_ENABLED_CLK
-				: HANDOFF_DISABLED_CLK;
+		return md->ops->is_enabled(md)
+			? HANDOFF_ENABLED_CLK
+			: HANDOFF_DISABLED_CLK;
 
 	/*
 	 * If this function returns 'enabled' even when the clock downstream

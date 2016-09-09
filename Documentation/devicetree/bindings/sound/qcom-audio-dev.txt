@@ -38,7 +38,23 @@ Required properties:
                             low latency.
                             regular : regular low latency stream
                             ultra : ultra low latency stream
+                            ull-pp : ultra low latency stream with post-processing capability
 
+* msm-pcm-dsp-noirq
+
+Required properties:
+
+ - compatible : "qcom,msm-pcm-dsp-noirq";
+
+   Optional properties
+
+      - qcom,msm-pcm-low-latency : Flag indicating whether
+        the device node is of type low latency
+
+      - qcom,latency-level : Flag indicating whether the device node
+                           is of type low latency or ultra low latency
+                           ultra : ultra low latency stream
+                           ull-pp : ultra low latency stream with post-processing capability
 * msm-pcm-routing
 
 Required properties:
@@ -347,10 +363,10 @@ Required properties:
 
  - qcom,cdc-rst-n-gpio :                   TLMM GPIO number
 
- - pinctrl-names:                          Pinctrl state names for each pin
-                                           group configuration.
- - pinctrl-x:                              Defines pinctrl state for each pin
-                                           group
+ - pinctrl-names:			  Pinctrl state names for each pin
+					  group configuration.
+ - pinctrl-x: 				  Defines pinctrl state for each pin
+					  group
 Example:
 
 	qcom,msm-pcm {

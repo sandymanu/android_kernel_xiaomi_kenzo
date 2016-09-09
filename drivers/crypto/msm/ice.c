@@ -1211,7 +1211,7 @@ static void qcom_ice_debug(struct platform_device *pdev)
 	if (!ice_dev->is_ice_enabled)
 		pr_err("%s: ICE device is not enabled\n", __func__);
 
-	pr_info("%s: =========== REGISTER DUMP (%p)===========\n",
+	pr_err("%s: =========== REGISTER DUMP (%p)===========\n",
 			ice_dev->ice_instance_type, ice_dev);
 
 	pr_err("%s: ICE Control: 0x%08x | ICE Reset: 0x%08x\n",

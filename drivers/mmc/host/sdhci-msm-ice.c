@@ -256,7 +256,6 @@ int sdhci_msm_ice_resume(struct sdhci_host *host)
 		}
 	}
 
-
 	msm_host->ice.state = SDHCI_MSM_ICE_STATE_ACTIVE;
 	return 0;
 }

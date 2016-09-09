@@ -802,10 +802,10 @@ out:
 
 static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 {
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 	u32 dll_status, ddr_config;
 	int ret = 0;
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 
 	pr_debug("%s: Enter %s\n", mmc_hostname(host->mmc), __func__);
 
@@ -1781,6 +1781,9 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 
 	if (of_get_property(np, "qcom,nonremovable", NULL))
 		pdata->nonremovable = true;
+
+	if (of_get_property(np, "qcom,broken-pwr-cycle-host", NULL))
+		pdata->broken_pwr_cycle_host = true;
 
 	if (of_get_property(np, "qcom,modified-dynamic-qos", NULL))
 		pdata->use_mod_dynamic_qos = true;
@@ -3858,6 +3861,9 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 
 	if (msm_host->pdata->nonremovable)
 		msm_host->mmc->caps |= MMC_CAP_NONREMOVABLE;
+
+	if (msm_host->pdata->broken_pwr_cycle_host)
+		msm_host->mmc->caps2 |= MMC_CAP2_BROKEN_PWR_CYCLE;
 
 	if (msm_host->pdata->nonhotplug)
 		msm_host->mmc->caps2 |= MMC_CAP2_NONHOTPLUG;

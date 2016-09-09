@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
  * Copyright (C) 2016 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -4183,9 +4183,8 @@ reschedule:
 static int smbchg_charging_status_change(struct smbchg_chip *chip)
 {
 	smbchg_vfloat_adjust_check(chip);
-	FG_charger_status = get_prop_batt_status(chip);
 	set_property_on_fg(chip, POWER_SUPPLY_PROP_STATUS,
-			FG_charger_status);
+			get_prop_batt_status(chip));
 	return 0;
 }
 
@@ -4997,6 +4996,8 @@ static int smbchg_prepare_for_pulsing(struct smbchg_chip *chip)
 		goto handle_removal;
 	}
 
+	set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DP0P6_DMF);
+
 	/* disable APSD */
 	pr_smb(PR_MISC, "Disabling APSD\n");
 	rc = smbchg_sec_masked_write(chip,
@@ -5020,7 +5021,6 @@ static int smbchg_prepare_for_pulsing(struct smbchg_chip *chip)
 	smbchg_sec_masked_write(chip, chip->usb_chgpth_base + USB_AICL_CFG,
 			AICL_EN_BIT, AICL_EN_BIT);
 
-	set_usb_psy_dp_dm(chip, POWER_SUPPLY_DP_DM_DP0P6_DMF);
 	/*
 	 * DCP will switch to HVDCP in this time by removing the short
 	 * between DP DM
@@ -5149,7 +5149,9 @@ out:
 	}
 
 	smbchg_handle_hvdcp3_disable(chip);
-
+	/* This could be because allow_hvdcp3 set to false runtime */
+	if (is_usb_present(chip) && !chip->allow_hvdcp3_detection)
+		smbchg_handle_hvdcp3_disable(chip);
 	return rc;
 }
 
@@ -5354,6 +5356,9 @@ static int smbchg_unprepare_for_pulsing_lite(struct smbchg_chip *chip)
 		update_usb_status(chip, 0, 0);
 	}
 	smbchg_handle_hvdcp3_disable(chip);
+	/* This could be because allow_hvdcp3 set to false runtime */
+	if (is_usb_present(chip) && !chip->allow_hvdcp3_detection)
+		smbchg_handle_hvdcp3_disable(chip);
 
 	return rc;
 }
@@ -6255,7 +6260,8 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 	 * set usb_psy's dp=f dm=f if this is a new insertion, i.e. it is
 	 * not already src_detected and usbin_uv is seen falling
 	 */
-	if (!(reg & USBIN_UV_BIT) && !(reg & USBIN_SRC_DET_BIT)) {
+	if (!(reg & USBIN_UV_BIT) && !(reg & USBIN_SRC_DET_BIT) &&
+		!chip->hvdcp_3_det_ignore_uv) {
 		pr_smb(PR_MISC, "setting usb psy dp=f dm=f\n");
 		power_supply_set_dp_dm(chip->usb_psy,
 				POWER_SUPPLY_DP_DM_DPF_DMF);
@@ -7718,6 +7724,7 @@ static int smbchg_check_chg_version(struct smbchg_chip *chip)
 		pr_err("PMIC subtype %d not supported, WA flags not set\n",
 				pmic_rev_id->pmic_subtype);
 	}
+	chip->allow_hvdcp3_detection = true;
 
 	pr_smb(PR_STATUS, "pmic=%s, wa_flags=0x%x\n",
 			pmic_rev_id->pmic_name, chip->wa_flags);
@@ -7859,7 +7866,7 @@ static int smbchg_probe(struct spmi_device *spmi)
 	if (rc) {
 		dev_err(&spmi->dev,
 			"Couldn't initialize regulator rc=%d\n", rc);
-		return rc;
+		goto free_regulator;
 	}
 
 	rc = smbchg_hw_init(chip);

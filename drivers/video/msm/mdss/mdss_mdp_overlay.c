@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -51,6 +51,8 @@
 
 #define BUF_POOL_SIZE 32
 #define PIPE_CLEANUP_TIMEOUT_US 100000
+#define MAX_CURSOR_IMG_WIDTH 512
+#define MAX_CURSOR_IMG_HEIGHT 512
 
 static int mdss_mdp_overlay_free_fb_pipe(struct msm_fb_data_type *mfd);
 static int mdss_mdp_overlay_fb_parse_dt(struct msm_fb_data_type *mfd);
@@ -3644,7 +3646,8 @@ static int mdss_mdp_hw_cursor_update(struct msm_fb_data_type *mfd,
 		roi.x, roi.y, roi.w, roi.h, img->width, img->height,
 		cursor->enable, cursor->set);
 
-	cursor_frame_size = PAGE_ALIGN(img->width * img->height * 4);
+	cursor_frame_size = PAGE_ALIGN(MAX_CURSOR_IMG_WIDTH
+					* MAX_CURSOR_IMG_HEIGHT * 4);
 	if (!mfd->cursor_buf && (cursor->set & FB_CUR_SETIMAGE)) {
 		mfd->cursor_buf = dma_alloc_coherent(&mfd->pdev->dev,
 					cursor_frame_size,
@@ -3675,7 +3678,7 @@ static int mdss_mdp_hw_cursor_update(struct msm_fb_data_type *mfd,
 	if (cursor->set & FB_CUR_SETIMAGE) {
 		u32 cursor_addr;
 		ret = copy_from_user(mfd->cursor_buf, img->data,
-					cursor_frame_size);
+				img->width * img->height * 4);
 		if (ret) {
 			pr_err("copy_from_user error. rc=%d\n", ret);
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
@@ -4156,16 +4159,20 @@ static int __mdss_overlay_src_split_sort(struct msm_fb_data_type *mfd,
 		__overlay_swap_func);
 
 	for (i = 0; i < num_ovs; i++) {
+		if (ovs[i].z_order >= MDSS_MDP_MAX_STAGE) {
+			pr_err("invalid stage:%u\n", ovs[i].z_order);
+			return -EINVAL;
+		}
 		if (ovs[i].dst_rect.x < left_lm_w) {
 			if (left_lm_zo_cnt[ovs[i].z_order] == 2) {
-				pr_err("more than 2 ov @ stage%d on left lm\n",
+				pr_err("more than 2 ov @ stage%u on left lm\n",
 					ovs[i].z_order);
 				return -EINVAL;
 			}
 			left_lm_zo_cnt[ovs[i].z_order]++;
 		} else {
 			if (right_lm_zo_cnt[ovs[i].z_order] == 2) {
-				pr_err("more than 2 ov @ stage%d on right lm\n",
+				pr_err("more than 2 ov @ stage%u on right lm\n",
 					ovs[i].z_order);
 				return -EINVAL;
 			}

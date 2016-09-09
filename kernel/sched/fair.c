@@ -3109,7 +3109,7 @@ static inline int is_cpu_throttling_imminent(int cpu)
 
 static inline int is_task_migration_throttled(struct task_struct *p)
 {
-	u64 delta = sched_clock() - p->run_start;
+	u64 delta = sched_ktime_clock() - p->run_start;
 
 	return delta < sched_min_runtime;
 }
@@ -3856,6 +3856,7 @@ static void enqueue_sleeper(struct cfs_rq *cfs_rq, struct sched_entity *se)
 			}
 
 			trace_sched_stat_blocked(tsk, delta);
+			trace_sched_blocked_reason(tsk);
 
 			/*
 			 * Blocking time is in units of nanosecs, so shift by

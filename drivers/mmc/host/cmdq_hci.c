@@ -365,9 +365,6 @@ static int cmdq_enable(struct mmc_host *mmc)
 	cq_host->enabled = true;
 	mmc_host_clr_cq_disable(mmc);
 
-	if (cq_host->ops->set_transfer_params)
-		cq_host->ops->set_transfer_params(mmc);
-
 	if (cq_host->ops->set_block_size)
 		cq_host->ops->set_block_size(cq_host->mmc);
 
@@ -613,10 +610,10 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	}
 
 	if (mrq->cmdq_req->cmdq_req_flags & DCMD) {
-		cmdq_prep_dcmd_desc(mmc, mrq);
-		cq_host->mrq_slot[DCMD_SLOT] = mrq;
 		if (cq_host->ops->pm_qos_update)
 			cq_host->ops->pm_qos_update(mmc, NULL, true);
+		cmdq_prep_dcmd_desc(mmc, mrq);
+		cq_host->mrq_slot[DCMD_SLOT] = mrq;
 		/* DCMD's are always issued on a fixed slot */
 		tag = DCMD_SLOT;
 		goto ring_doorbell;
@@ -631,6 +628,9 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		}
 	}
 
+	if (cq_host->ops->pm_qos_update)
+		cq_host->ops->pm_qos_update(mmc, NULL, true);
+
 	task_desc = (__le64 __force *)get_desc(cq_host, tag);
 
 	cmdq_prep_task_desc(mrq, &data, 1,
@@ -643,9 +643,6 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		       mmc_hostname(mmc), __func__, err);
 		return err;
 	}
-
-	if (cq_host->ops->pm_qos_update)
-		cq_host->ops->pm_qos_update(mmc, NULL, true);
 
 	BUG_ON(cmdq_readl(cq_host, CQTDBR) & (1 << tag));
 

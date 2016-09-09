@@ -109,6 +109,7 @@
 			"cam_vaf", "sensor_gpio_reset", "sensor_cam_mclk";
 		qcom,cam-power-seq-cfg-val = <1 1 1 1 1 24000000>;
 		qcom,cam-power-seq-delay = <5 5 5 5 5 5>;
+		qcom,i2c-freq-mode = <1>;
 		status = "ok";
 		clocks = <&clock_gcc clk_mclk0_clk_src>,
 			<&clock_gcc clk_gcc_camss_mclk0_clk>;

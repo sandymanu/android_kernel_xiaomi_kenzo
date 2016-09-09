@@ -140,6 +140,9 @@ static int mmc_ios_show(struct seq_file *s, void *data)
 	case MMC_TIMING_MMC_HS200:
 		str = "mmc high-speed SDR200";
 		break;
+	case MMC_TIMING_MMC_HS400:
+		str = "mmc high-speed HS400";
+		break;
 	default:
 		str = "invalid";
 		break;
@@ -773,8 +776,7 @@ void mmc_add_card_debugfs(struct mmc_card *card)
 			goto err;
 
 	if (mmc_card_mmc(card) && (card->ext_csd.rev >= 5) &&
-	    (mmc_card_support_auto_bkops(card) ||
-	     mmc_card_get_bkops_en_manual(card)))
+	     (mmc_card_get_bkops_en_manual(card)))
 		if (!debugfs_create_file("bkops_stats", S_IRUSR, root, card,
 					 &mmc_dbg_bkops_stats_fops))
 			goto err;

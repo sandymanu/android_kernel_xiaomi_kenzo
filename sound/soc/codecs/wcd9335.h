@@ -128,7 +128,6 @@ enum {
 	SPKR_MODE_1,          /* COMP Gain = 12dB, Smartboost Max = 5.5V */
 };
 
-
 /*
  * Rx path gain offsets
  */

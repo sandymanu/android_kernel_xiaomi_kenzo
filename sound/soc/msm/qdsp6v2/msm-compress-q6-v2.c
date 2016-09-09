@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -651,9 +651,10 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 	union snd_codec_options *codec_options;
 
 	int ret = 0;
-	uint16_t bit_width = 16;
+	uint16_t bit_width;
 	bool use_default_chmap = true;
 	char *chmap = NULL;
+	uint16_t sample_word_size;
 
 	pr_debug("%s: use_gapless_codec_options %d\n",
 			__func__, use_gapless_codec_options);
@@ -677,15 +678,30 @@ static int msm_compr_send_media_format_block(struct snd_compr_stream *cstream,
 			chmap =
 			    pdata->ch_map[rtd->dai_link->be_id]->channel_map;
 		}
-		if (prtd->codec_param.codec.format == SNDRV_PCM_FORMAT_S24_LE)
+
+		switch (prtd->codec_param.codec.format) {
+		case SNDRV_PCM_FORMAT_S24_LE:
 			bit_width = 24;
-		ret = q6asm_media_format_block_pcm_format_support_v2(
+			sample_word_size = 32;
+			break;
+		case SNDRV_PCM_FORMAT_S24_3LE:
+			bit_width = 24;
+			sample_word_size = 24;
+			break;
+		case SNDRV_PCM_FORMAT_S16_LE:
+		default:
+			bit_width = 16;
+			sample_word_size = 16;
+			break;
+		}
+		ret = q6asm_media_format_block_pcm_format_support_v3(
 							prtd->audio_client,
 							prtd->sample_rate,
 							prtd->num_channels,
 							bit_width, stream_id,
 							use_default_chmap,
-							chmap);
+							chmap,
+							sample_word_size);
 		if (ret < 0)
 			pr_err("%s: CMD Format block failed\n", __func__);
 
@@ -912,7 +928,8 @@ static int msm_compr_configure_dsp(struct snd_compr_stream *cstream)
 	};
 
 	pr_debug("%s: stream_id %d\n", __func__, ac->stream_id);
-	if (prtd->codec_param.codec.format == SNDRV_PCM_FORMAT_S24_LE)
+	if ((prtd->codec_param.codec.format == SNDRV_PCM_FORMAT_S24_LE) ||
+        	(prtd->codec_param.codec.format == SNDRV_PCM_FORMAT_S24_3LE))
 		bits_per_sample = 24;
 	else if (prtd->codec_param.codec.format == SNDRV_PCM_FORMAT_S32_LE)
 		bits_per_sample = 32;
@@ -939,7 +956,7 @@ static int msm_compr_configure_dsp(struct snd_compr_stream *cstream)
 	} else {
 		pr_debug("%s: stream_id %d bits_per_sample %d\n",
 				__func__, ac->stream_id, bits_per_sample);
-		ret = q6asm_stream_open_write_v2(ac,
+		ret = q6asm_stream_open_write_v3(ac,
 				prtd->codec, bits_per_sample,
 				ac->stream_id,
 				prtd->gapless_state.use_dsp_gapless_mode);
@@ -1841,7 +1858,7 @@ static int msm_compr_trigger(struct snd_compr_stream *cstream, int cmd)
 
 		pr_debug("%s: open_write stream_id %d bits_per_sample %d",
 				__func__, stream_id, bits_per_sample);
-		rc = q6asm_stream_open_write_v2(prtd->audio_client,
+		rc = q6asm_stream_open_write_v3(prtd->audio_client,
 				prtd->codec, bits_per_sample,
 				stream_id,
 				prtd->gapless_state.use_dsp_gapless_mode);
@@ -2056,7 +2073,7 @@ static int msm_compr_get_caps(struct snd_compr_stream *cstream,
 		memcpy(arg, &prtd->compr_cap, sizeof(struct snd_compr_caps));
 	} else {
 		ret = -EINVAL;
-		pr_err("%s: arg (0x%p), prtd (0x%p)\n", __func__, arg, prtd);
+		pr_err("%s: arg (0x%pK), prtd (0x%pK)\n", __func__, arg, prtd);
 	}
 
 	return ret;
@@ -2772,7 +2789,7 @@ static int msm_compr_audio_effects_config_info(struct snd_kcontrol *kcontrol,
 					       struct snd_ctl_elem_info *uinfo)
 {
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 128;
+	uinfo->count = MAX_PP_PARAMS_SZ;
 	uinfo->value.integer.min = 0;
 	uinfo->value.integer.max = 0xFFFFFFFF;
 	return 0;

@@ -817,6 +817,9 @@ static int wsa881x_spkr_pa_event(struct snd_soc_dapm_widget *w,
 			regmap_multi_reg_write(wsa881x->regmap,
 					wsa881x_pre_pmu_pa,
 					ARRAY_SIZE(wsa881x_pre_pmu_pa));
+		swr_slvdev_datapath_control(wsa881x->swr_slave,
+					    wsa881x->swr_slave->dev_num,
+					    true);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		if (WSA881X_IS_2_0(wsa881x->version)) {
@@ -859,6 +862,9 @@ static int wsa881x_spkr_pa_event(struct snd_soc_dapm_widget *w,
 		}
 		schedule_delayed_work(&wsa881x->ocp_ctl_work,
 			msecs_to_jiffies(WSA881X_OCP_CTL_TIMER_SEC * 1000));
+		/* Force remove group */
+		swr_remove_from_group(wsa881x->swr_slave,
+				      wsa881x->swr_slave->dev_num);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		if (wsa881x->visense_enable) {

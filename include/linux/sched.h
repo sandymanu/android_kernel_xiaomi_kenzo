@@ -1343,6 +1343,7 @@ struct task_struct {
 
 	cputime_t utime, stime, utimescaled, stimescaled;
 	cputime_t gtime;
+	unsigned long long cpu_power;
 #ifndef CONFIG_VIRT_CPU_ACCOUNTING_NATIVE
 	struct cputime prev_cputime;
 #endif
@@ -2065,6 +2066,7 @@ extern u64 cpu_clock(int cpu);
 extern u64 local_clock(void);
 extern u64 sched_clock_cpu(int cpu);
 
+extern u64 sched_ktime_clock(void);
 
 extern void sched_clock_init(void);
 extern int sched_clock_initialized(void);
