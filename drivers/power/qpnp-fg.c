@@ -1686,8 +1686,6 @@ static int get_prop_capacity(struct fg_chip *chip)
 
 	if (chip->battery_missing)
 		return MISSING_CAPACITY;
-	if (!chip->profile_loaded && !chip->use_otp_profile)
-		return DEFAULT_CAPACITY;
 	if (chip->charge_full)
 		return FULL_CAPACITY;
 	if (chip->soc_empty) {
